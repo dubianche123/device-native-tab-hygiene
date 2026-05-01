@@ -185,19 +185,20 @@ Both `performStaleCheck()` and `aiCleanup()` skip all protected tab IDs. This pr
 - `closeActiveSession()`: sets `lastBackgroundedAt = now` on the tab entry.
 - `checkpointActiveSession()`: preserves `lastForegroundAt`.
 
-**Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions compare the background clock (`now - lastBackgroundedAt`) against an effective threshold. For learned categories, that threshold is:
+**Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions compare the background clock (`now - lastBackgroundedAt`) against an effective close-after time. For learned categories, that time is:
 
 ```
-effectiveThreshold = learnedManualThreshold × importanceMultiplier
+modelClosureTime = learnedManualThreshold × importanceMultiplier
+effectiveClosureTime = min(modelClosureTime, userClosureTimeLimit)
 importanceMultiplier = 0.75 + normalizedFocusRatio × 1.0
 normalizedFocusRatio = clamp(foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs), 0, 1)
 ```
 
-The multiplier is clamped to `0.75x..1.75x`, and the final threshold is capped to `[1 min, 2× category default]`. User custom thresholds are hard overrides and are not multiplied.
+The multiplier is clamped to `0.75x..1.75x`. The model-calculated closure time is capped to `[1 min, 2× category default]`, then the user's Settings slider caps it as the final closure time limit. The slider is not a model replacement; it is the upper bound users can reason about.
 
-**Stale detection**: `isTabStale()` now receives a background reference timestamp from `backgroundReferenceTime(entry)`, which prefers `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries.
+**Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, and close reason for stale checks / AI Cleanup.
 
-**AI Cleanup scoring**: Uses `backgroundAgeMs / effectiveThreshold` as threshold pressure. Foreground/background importance is already baked into `effectiveThreshold`, so do not add a separate focus-ratio protection term.
+**AI Cleanup scoring**: Uses `backgroundAgeMs / effectiveClosureTime` as threshold pressure. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term.
 
 **Migration**: Old entries without `lastBackgroundedAt` gracefully fall back to `lastVisited`. New entries get both fields populated.
 
@@ -207,11 +208,11 @@ The multiplier is clamped to `0.75x..1.75x`, and the final threshold is capped t
 
 **AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
 ```
-score = categoryPriority + log₂(interactions + 1) × 8 - min(72, backgroundAgeMs / effectiveThreshold × 24)
+score = categoryPriority + log₂(interactions + 1) × 8 - min(72, backgroundAgeMs / effectiveClosureTime × 24)
 ```
 - NSFW categories get score -1000 (always closed first).
 - Lower score = more likely to be closed.
-- `effectiveThreshold` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists.
+- `effectiveClosureTime` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists, then applies the user's closure time limit.
 - **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
 - High-priority categories such as AI/work are protected; long idle time lowers the score; interactions raise it.
 - Re-checks memory every 5 closures; stops if pressure < target.
@@ -237,7 +238,7 @@ Training samples: the popup displays real `trainingSamples` from the companion. 
 
 ## Closure Learning
 
-Learns from HOW the user closes tabs to dynamically adjust per-category retention thresholds. Three data streams:
+Learns from HOW the user closes tabs to dynamically adjust per-category learned close-after times. Three data streams:
 
 | Type | Source | Learning weight |
 |---|---|---|
@@ -249,20 +250,20 @@ Learns from HOW the user closes tabs to dynamically adjust per-category retentio
 
 **Per-sample fields**: `type`, `category`, `dwellMs` (foreground dwell), `backgroundAgeMs` (time since tab left foreground), `interactions`, `openedAt`, `lastVisited`, `lastBackgroundedAt`, `closedAt`, `hourOfDay`.
 
-**Threshold recommendation algorithm**:
+**Learned close-time recommendation algorithm**:
 1. Collect manual close `backgroundAgeMs` values per category (time since tab left foreground).
 2. Ignore zero / near-zero values below 15 seconds — those indicate immediate close or misclick, not meaningful retention data.
 3. Compute median meaningful `backgroundAgeMs` of manual closes per category.
-4. Recommended threshold = `median_background_age × 1.5`, clamped to category floor and `2× default`.
+4. Recommended learned close time = `median_background_age × 1.5`, clamped to category floor and `2× default`.
 5. Requires ≥ 3 meaningful manual close samples before recommending.
 6. Fallback: if there are not enough meaningful `backgroundAgeMs` samples yet, use meaningful `dwellMs` (foreground dwell) as proxy for active-close patterns.
-7. Precedence for `isTabStale()`: user custom thresholds > learned thresholds > default category `maxAgeMs`.
+7. Runtime close time: `min(learned close time × foreground/background importance multiplier, user maximum close-after slider)`. If no learned time exists yet, the category default is capped by the user slider.
 
-**Learned threshold floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive.
+**Learned close-time floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive.
 
 **Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation.
 
-**Popup UI**: "Closure Learning" section in ML Insights tab shows per-category stats (manual/auto counts, median foreground dwell, median background age, recommended threshold vs default, delta). Reset button in Settings.
+**Popup UI**: Settings sliders are user-facing maximum close-after times, not abstract model thresholds. Each category row shows the current ML × importance close time and the final used time (`min(ML time, slider cap)`). "Closure Learning" in ML Insights shows per-category stats (manual/auto counts, median foreground dwell, median background age, learned recommendation vs default, delta). Reset button in Settings.
 
 **Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `getLearnedThresholds`, `getCategoryClosureStats`, `getLearningSummary`, `resetClosureLearning`.
 
@@ -274,7 +275,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category retentio
 - Idle detector: `extension/js/idle-detector.js` (async `disconnectedStatus`, calendar-aware fallback)
 - Storage: `extension/js/storage.js` (new settings keys, tagged-tabs functions)
 - Background: `extension/js/background.js` (test mode, memory, AI cleanup, AI suggestions, force-trigger)
-- Closure learner: `extension/js/closure-learner.js` (new — closure sampling, threshold recommendations)
+- Closure learner: `extension/js/closure-learner.js` (new — closure sampling, learned close-time recommendations)
 - Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings, closure learning UI)
 - Model transfer helpers: `scripts/export_model_bundle.sh`, `scripts/import_model_bundle.sh`
 
@@ -299,6 +300,6 @@ All 8 JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 - DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.
 - URL paths are never matched against category keywords — this is intentional to prevent false positives.
 - Finalized (2026-05-01): IPC logic is synced for protocol version 2, including per-day `holidayLevels` for prediction requests. Hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is handled with clearly labeled browser heuristic estimates. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are implemented and syntax-verified.
-- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses median background age × 1.5 to recommend per-category retention thresholds. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Integrated into `isTabStale()` (learned thresholds between custom and defaults) and popup ML Insights panel.
+- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses median background age × 1.5 to recommend per-category learned close-after times. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Runtime cleanup multiplies the learned time by foreground/background importance, then caps it with the user-facing maximum close-after slider.
 - Added (2026-05-01): Protected tabs + foreground/background lifecycle. `getProtectedTabIds()` queries Chrome for active/pinned/audible tabs before any auto-close scan — both `performStaleCheck()` and `aiCleanup()` skip them. `lastForegroundAt` / `lastBackgroundedAt` replace `lastVisited` for stale detection (fallback for old entries). AI Cleanup scoring uses `backgroundAgeMs` + `focusRatio` for importance weighting.
 - Adjusted (2026-05-01): `snapshotAllTabs()`, tab creation, tab navigation, popup active-tab display, and AI Suggestions now preserve/use `lastBackgroundedAt` consistently. Suggestions should not count protected tabs as stale.

@@ -27,7 +27,7 @@ import {
   getActiveSession, setActiveSession, clearActiveSession,
   getTaggedTabs, tagTab, untagTab, clearAllTags,
 } from './storage.js';
-import { categorizePage, getMaxAgeMs } from './categorizer.js';
+import { categorizePage } from './categorizer.js';
 import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary, resetClosureLearning } from './closure-learner.js';
 import {
   classifyURL,
@@ -103,33 +103,36 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
   const categoryKey = entry.category || 'other';
   const backgroundAgeMs = closureAgeMs(entry, now);
   const importance = normalizedTabImportance(entry, backgroundAgeMs);
-  const customThreshold = settings.customThresholds?.[categoryKey];
-  const hasCustomThreshold = typeof customThreshold === 'number' && customThreshold > 0;
+  const closureLimit = settings.customThresholds?.[categoryKey];
+  const hasClosureLimit = typeof closureLimit === 'number' && closureLimit > 0;
   const learnedThreshold = learnedThresholds?.[categoryKey];
   const hasLearnedThreshold = typeof learnedThreshold === 'number' && learnedThreshold > 0;
   const defaultThreshold = CATEGORIES[categoryKey]?.maxAgeMs || CATEGORIES.other?.maxAgeMs || 7 * 24 * 60 * 60 * 1000;
-  const baseThresholdMs = getMaxAgeMs(
-    categoryKey,
-    hasCustomThreshold ? settings.customThresholds : {},
-    learnedThresholds,
-  );
+  const limitMs = hasClosureLimit ? closureLimit : defaultThreshold;
 
-  let maxAgeMs = baseThresholdMs;
-  let thresholdSource = hasCustomThreshold ? 'custom' : (hasLearnedThreshold ? 'learned' : 'default');
+  let modelMaxAgeMs = defaultThreshold;
+  let thresholdSource = 'default';
 
-  if (!hasCustomThreshold && hasLearnedThreshold) {
-    maxAgeMs = clamp(
+  if (hasLearnedThreshold) {
+    modelMaxAgeMs = clamp(
       learnedThreshold * importance.importanceMultiplier,
       MIN_EFFECTIVE_THRESHOLD_MS,
-      defaultThreshold * 2,
+      Math.max(MIN_EFFECTIVE_THRESHOLD_MS, defaultThreshold * 2),
     );
     thresholdSource = 'learned_x_importance';
+  }
+
+  const maxAgeMs = Math.min(modelMaxAgeMs, limitMs);
+  if (maxAgeMs < modelMaxAgeMs) {
+    thresholdSource = hasLearnedThreshold ? 'learned_x_importance_capped' : 'default_capped';
   }
 
   return {
     ...importance,
     categoryKey,
-    baseThresholdMs,
+    baseThresholdMs: hasLearnedThreshold ? learnedThreshold : defaultThreshold,
+    modelMaxAgeMs,
+    limitMs,
     maxAgeMs,
     thresholdSource,
     stale: backgroundAgeMs > maxAgeMs,

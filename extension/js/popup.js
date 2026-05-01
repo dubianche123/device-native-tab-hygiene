@@ -16,6 +16,7 @@ import { getUpcomingHolidays, getRestDayLevel, getHolidayName, getExtendedPeriod
 const IMPORTANCE_MULTIPLIER_MIN = 0.75;
 const IMPORTANCE_MULTIPLIER_MAX = 1.75;
 const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function formatAge(ms) {
   ms = Math.max(0, ms || 0);
@@ -52,6 +53,11 @@ function formatPercent(value, digits = 0) {
 function formatDays(value) {
   const days = Number(value) || 0;
   return days >= 10 ? days.toFixed(0) : days.toFixed(1);
+}
+
+function finalClosureTimeFor(modelTimeMs, capDays) {
+  const capMs = Math.max(0.1, Number(capDays) || 0.1) * DAY_MS;
+  return Math.min(modelTimeMs || capMs, capMs);
 }
 
 function formatClock(hour, minute) {
@@ -106,7 +112,7 @@ function clamp(value, min, max) {
 }
 
 function importanceMultiplierFor(entry, backgroundAgeMs) {
-  const foregroundDwellMs = Math.max(0, entry?.dwellMs || 0);
+  const foregroundDwellMs = Math.max(0, liveDwellMs(entry) || 0);
   const safeBackgroundAgeMs = Math.max(0, backgroundAgeMs || 0);
   const totalObservedMs = foregroundDwellMs + safeBackgroundAgeMs;
   const focusRatio = totalObservedMs > 0 ? foregroundDwellMs / totalObservedMs : 0;
@@ -115,12 +121,9 @@ function importanceMultiplierFor(entry, backgroundAgeMs) {
     + normalizedImportance * (IMPORTANCE_MULTIPLIER_MAX - IMPORTANCE_MULTIPLIER_MIN);
 }
 
-function effectiveMaxAgeFor(entry, backgroundAgeMs, settings = {}, learnedThresholds = {}) {
+function modelMaxAgeFor(entry, backgroundAgeMs, learnedThresholds = {}) {
   const categoryKey = entry.category || 'other';
   const cat = CATEGORIES[categoryKey] || DEFAULT_CATEGORY;
-  const customThreshold = settings.customThresholds?.[categoryKey];
-  if (typeof customThreshold === 'number' && customThreshold > 0) return customThreshold;
-
   const learnedThreshold = learnedThresholds[categoryKey];
   if (typeof learnedThreshold === 'number' && learnedThreshold > 0) {
     const defaultThreshold = cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
@@ -132,6 +135,75 @@ function effectiveMaxAgeFor(entry, backgroundAgeMs, settings = {}, learnedThresh
   }
 
   return cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
+}
+
+function closureLimitFor(categoryKey, settings = {}) {
+  const cat = CATEGORIES[categoryKey] || DEFAULT_CATEGORY;
+  const limit = settings.customThresholds?.[categoryKey];
+  return typeof limit === 'number' && limit > 0 ? limit : (cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs);
+}
+
+function effectiveMaxAgeFor(entry, backgroundAgeMs, settings = {}, learnedThresholds = {}) {
+  const categoryKey = entry.category || 'other';
+  return Math.min(
+    modelMaxAgeFor(entry, backgroundAgeMs, learnedThresholds),
+    closureLimitFor(categoryKey, settings),
+  );
+}
+
+function backgroundAgeFor(entry, now = Date.now()) {
+  const reference = entry?.lastBackgroundedAt || entry?.lastVisited || entry?.openedAt || now;
+  return Math.max(0, now - reference);
+}
+
+function categoryClosureTiming(categoryKey, registry = {}, learnedThresholds = {}, settings = {}) {
+  const cat = CATEGORIES[categoryKey] || DEFAULT_CATEGORY;
+  const defaultTime = cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
+  const capTime = closureLimitFor(categoryKey, settings);
+  const learnedThreshold = learnedThresholds[categoryKey];
+  const hasLearned = typeof learnedThreshold === 'number' && learnedThreshold > 0;
+
+  if (!hasLearned) {
+    const modelTime = defaultTime;
+    return {
+      modelTime,
+      finalTime: Math.min(modelTime, capTime),
+      capTime,
+      hasLearned: false,
+      liveSampleCount: 0,
+    };
+  }
+
+  const now = Date.now();
+  const values = Object.values(registry)
+    .filter(entry => (entry.category || 'other') === categoryKey)
+    .map(entry => modelMaxAgeFor(entry, backgroundAgeFor(entry, now), learnedThresholds))
+    .filter(value => typeof value === 'number' && value > 0)
+    .sort((a, b) => a - b);
+
+  if (values.length === 0) {
+    const modelTime = clamp(
+      learnedThreshold,
+      MIN_EFFECTIVE_THRESHOLD_MS,
+      Math.max(MIN_EFFECTIVE_THRESHOLD_MS, defaultTime * 2),
+    );
+    return {
+      modelTime,
+      finalTime: Math.min(modelTime, capTime),
+      capTime,
+      hasLearned: true,
+      liveSampleCount: 0,
+    };
+  }
+
+  const modelTime = values[Math.floor(values.length / 2)];
+  return {
+    modelTime,
+    finalTime: Math.min(modelTime, capTime),
+    capTime,
+    hasLearned: true,
+    liveSampleCount: values.length,
+  };
 }
 
 function faviconURL(entry) {
@@ -719,6 +791,8 @@ async function loadClosureLearning() {
 
 async function loadSettings() {
   const settings = await sendMessage({ type: 'getSettings' }) || {};
+  const registry = await sendMessage({ type: 'getRegistry' }) || {};
+  const learnedThresholds = await sendMessage({ type: 'getLearnedThresholds' }) || {};
 
   document.getElementById('setting-enabled').checked = settings.enabled !== false;
   document.getElementById('setting-use-companion').checked = settings.useCompanion !== false;
@@ -756,27 +830,58 @@ async function loadSettings() {
   // Update mode toggle UI
   updateModeToggle(settings.testMode === true);
 
-  // Build threshold controls
+  // Build closure-time cap controls.
   const container = document.getElementById('threshold-controls');
-  container.innerHTML = Object.entries(CATEGORIES).map(([key, cat]) => {
-    const current = settings.customThresholds?.[key] || cat.maxAgeMs;
-    const currentDays = Math.min(30, Math.max(0.1, current / (24 * 60 * 60 * 1000)));
+  const controlsHeader = `
+    <div class="threshold-row threshold-row--header">
+      <span>Category</span>
+      <span>Learned close time</span>
+      <span>Max close after</span>
+    </div>
+  `;
+  const controlsRows = Object.entries(CATEGORIES).map(([key, cat]) => {
+    const timing = categoryClosureTiming(key, registry, learnedThresholds, settings);
+    const current = timing.capTime;
+    const currentDays = Math.min(30, Math.max(0.1, current / DAY_MS));
+    const modelLabel = timing.hasLearned
+      ? `ML×imp ${formatAge(timing.modelTime)}`
+      : `Default ${formatAge(timing.modelTime)}`;
+    const modelTitle = timing.hasLearned
+      ? (
+        timing.liveSampleCount > 0
+          ? `Machine-learned close time after foreground/background importance multiplier. Median of ${timing.liveSampleCount} live tab(s): ${formatAge(timing.modelTime)}.`
+          : `Machine-learned base close time. Open tabs in this category will apply their own foreground/background importance multiplier.`
+      )
+      : `No manual-close model yet. Using category default: ${formatAge(timing.modelTime)}.`;
+    const finalTitle = `Actual automatic close limit is the smaller of ML time and your max: ${formatAge(timing.finalTime)}.`;
     return `
-      <div class="threshold-row">
+      <div class="threshold-row" data-model-ms="${Math.round(timing.modelTime)}">
         <span class="threshold-row__label" style="color:${cat.color}">${cat.label}</span>
-        <input class="threshold-row__range" type="range" data-cat="${key}" value="${currentDays}" min="0.1" max="30" step="0.1" aria-label="${escapeHTML(cat.label)} threshold slider">
-        <input class="threshold-row__number" type="number" data-cat="${key}" value="${formatDays(currentDays)}" step="0.1" min="0.1" max="30" aria-label="${escapeHTML(cat.label)} threshold days">
+        <span class="threshold-row__computed">
+          <span class="threshold-row__ml" title="${escapeHTML(modelTitle)}">${escapeHTML(modelLabel)}</span>
+          <span class="threshold-row__final" title="${escapeHTML(finalTitle)}">uses ${escapeHTML(formatAge(timing.finalTime))}</span>
+        </span>
+        <input class="threshold-row__range" type="range" data-cat="${key}" value="${currentDays}" min="0.1" max="30" step="0.1" aria-label="${escapeHTML(cat.label)} closure time limit slider">
+        <input class="threshold-row__number" type="number" data-cat="${key}" value="${formatDays(currentDays)}" step="0.1" min="0.1" max="30" aria-label="${escapeHTML(cat.label)} closure time limit days">
         <span class="threshold-row__unit">days</span>
       </div>`;
   }).join('');
+  container.innerHTML = controlsHeader + controlsRows;
 
-  container.querySelectorAll('.threshold-row').forEach((row) => {
+  container.querySelectorAll('.threshold-row:not(.threshold-row--header)').forEach((row) => {
     const slider = row.querySelector('.threshold-row__range');
     const number = row.querySelector('.threshold-row__number');
+    const final = row.querySelector('.threshold-row__final');
+    const modelTimeMs = Number(row.dataset.modelMs) || 0;
     const sync = (source) => {
       const value = Math.min(30, Math.max(0.1, parseFloat(source.value) || 0.1));
       slider.value = String(value);
       number.value = formatDays(value);
+      if (final) {
+        const finalMs = finalClosureTimeFor(modelTimeMs, value);
+        final.textContent = `uses ${formatAge(finalMs)}`;
+        final.title = `Actual automatic close limit is the smaller of ML time and your max: ${formatAge(finalMs)}.`;
+      }
     };
     slider.addEventListener('input', () => sync(slider));
     number.addEventListener('input', () => sync(number));
@@ -797,7 +902,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     const cat = input.dataset.cat;
     const days = Math.min(30, Math.max(0.1, parseFloat(input.value) || 0.1));
     if (days > 0) {
-      customThresholds[cat] = days * 24 * 60 * 60 * 1000;
+      customThresholds[cat] = days * DAY_MS;
     }
   });
 

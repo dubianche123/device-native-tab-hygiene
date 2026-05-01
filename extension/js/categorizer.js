@@ -241,22 +241,21 @@ export function categorizePage({ url, title = '', description = '', text = '' } 
 
 /**
  * Get the effective max-age for a category.
- * Precedence: user custom thresholds > learned thresholds > default category.
+ * User settings are closure time limits, so they cap learned/default time
+ * instead of replacing the model outright. Importance multipliers are applied
+ * in background.js because they require per-tab foreground/background data.
  */
-export function getMaxAgeMs(categoryKey, customThresholds = {}, learnedThresholds = {}) {
-  if (customThresholds[categoryKey]) {
-    return customThresholds[categoryKey];
-  }
-  if (learnedThresholds[categoryKey]) {
-    return learnedThresholds[categoryKey];
-  }
+export function getMaxAgeMs(categoryKey, closureLimits = {}, learnedThresholds = {}) {
   const cat = CATEGORIES[categoryKey];
-  return cat ? cat.maxAgeMs : DEFAULT_CATEGORY.maxAgeMs;
+  const defaultMaxAgeMs = cat ? cat.maxAgeMs : DEFAULT_CATEGORY.maxAgeMs;
+  const learnedMaxAgeMs = learnedThresholds[categoryKey] || defaultMaxAgeMs;
+  const closureLimitMs = closureLimits[categoryKey] || defaultMaxAgeMs;
+  return Math.min(learnedMaxAgeMs, closureLimitMs);
 }
 
 /**
- * Check whether a tab is "stale" — i.e. it has exceeded its category's
- * max idle time and should be closed.
+ * Check whether a tab is "stale" — i.e. it has exceeded the final
+ * close-after time for its category and should be closed.
  * @param {object} [learnedThresholds] — { [category]: maxAgeMs } from closure learner
  */
 export function isTabStale(staleSince, categoryKey, customThresholds = {}, learnedThresholds = {}) {

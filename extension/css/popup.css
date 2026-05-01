@@ -917,14 +917,28 @@ body {
 
 .threshold-row {
   display: grid;
-  grid-template-columns: minmax(118px, 1fr) 120px 70px 28px;
+  grid-template-columns: minmax(74px, 0.8fr) minmax(92px, 1fr) 58px 28px;
+  grid-template-areas:
+    "label computed computed computed"
+    "range range number unit";
   align-items: center;
-  gap: 8px;
-  padding: 7px 0;
+  gap: 5px 6px;
+  padding: 8px 0;
   font-size: 12px;
 }
 
+.threshold-row--header {
+  grid-template-areas: none;
+  grid-template-columns: minmax(74px, 0.8fr) minmax(120px, 1fr) minmax(110px, 0.8fr);
+  padding: 4px 0 2px;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
 .threshold-row__label {
+  grid-area: label;
   color: var(--text);
   min-width: 0;
   overflow: hidden;
@@ -932,13 +946,23 @@ body {
   white-space: nowrap;
 }
 
+.threshold-row__computed {
+  grid-area: computed;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
 .threshold-row__range {
+  grid-area: range;
   width: 100%;
   accent-color: var(--accent-light);
 }
 
 .threshold-row__number {
-  width: 70px;
+  grid-area: number;
+  width: 56px;
   padding: 3px 6px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -949,8 +973,36 @@ body {
 }
 
 .threshold-row__unit {
+  grid-area: unit;
   color: var(--text-muted);
   font-size: 10px;
+}
+
+.threshold-row__ml,
+.threshold-row__final {
+  min-width: 0;
+  padding: 2px 5px;
+  border: 1px solid rgba(162, 155, 254, 0.24);
+  border-radius: 6px;
+  color: var(--accent-light);
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.threshold-row__ml {
+  max-width: 104px;
+  background: rgba(162, 155, 254, 0.08);
+}
+
+.threshold-row__final {
+  max-width: 78px;
+  border-color: rgba(0, 206, 201, 0.24);
+  background: rgba(0, 206, 201, 0.08);
+  color: var(--success);
 }
 
 textarea {
