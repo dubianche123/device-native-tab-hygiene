@@ -193,7 +193,7 @@ function computePathExplanation(status = {}) {
   const count = status.activityCount || status.trainingSamples || 0;
   const min = status.minimumTrainingSamples || 100;
   if (count >= min && !status.modelLoaded && status.runtime !== 'lookup') {
-    return `CPU heuristic (awaiting idle/active variety for Core ML)`;
+    return 'CPU Heuristic';
   }
   return `CPU heuristic (${count}/${min} samples before Core ML)`;
 }
