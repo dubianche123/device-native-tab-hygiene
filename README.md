@@ -294,7 +294,7 @@ The import script verifies checksums, backs up existing local artifacts under:
 ~/Library/Application Support/Neural-Janitor/backups/
 ```
 
-After importing, restart Chrome / Edge or reload the extension so the companion reloads the model. Open the popup and check **Link: Connected**, **Training Samples**, and the ML runtime label.
+After importing, restart Chrome / Edge or reload the extension so the companion reloads the model. Open the popup and check **Link: Connected**, **Model Samples**, **Closure Samples**, and the ML runtime label.
 
 ## Using The Popup
 

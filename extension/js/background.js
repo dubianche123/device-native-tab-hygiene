@@ -855,16 +855,18 @@ async function aiCleanup() {
     const priority = catInfo.priority ?? 50;
     const retention = tabRetentionProfile(entry, settings, learnedThresholds, now);
     const backgroundAgeMs = retention.backgroundAgeMs;
-    const interactions = Math.max(1, entry.interactions || 0);
+    const interactions = Math.max(0, entry.interactions || 0);
+    const focusBonus = retention.normalizedImportance * 10;
 
-    // Score: lower = close first. Priority protects important categories;
-    // high background-threshold pressure lowers the score, interactions raise it.
+    // Score: lower = close first. Category/tag priority protects important
+    // tabs; foreground dwell adds protection; current idle ratio lowers the
+    // score; interactions still raise it.
     const interactionProtection = Math.log2(interactions + 1) * 8;
     const thresholdPressure = retention.maxAgeMs > 0 ? backgroundAgeMs / retention.maxAgeMs : 0;
     const idlePenalty = Math.min(72, thresholdPressure * 24);
     const score = entry.category === 'nsfw'
       ? -1000
-      : priority + interactionProtection - idlePenalty;
+      : priority + interactionProtection + focusBonus - idlePenalty;
 
     candidates.push({ tabId, entry, score, backgroundAgeMs, retention });
   }
@@ -1153,6 +1155,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'requestCompanionHealth': {
         const settings = await getSettings();
         if (settings.useCompanion === false) {
+          const closureLearning = await getLearningSummary();
           const devices = [
             { key: 'npu', label: 'NPU', detail: 'Apple Neural Engine', available: null, state: HARDWARE_MARKER_STATES.STANDBY },
             { key: 'gpu', label: 'GPU', detail: 'Metal GPU', available: null, state: HARDWARE_MARKER_STATES.STANDBY },
@@ -1182,6 +1185,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             powerSignal: 'standby',
             telemetryStatus: 'disabled',
             devices,
+            closureLearning,
             hardwareTelemetry: {
               source: 'settings',
               status: 'disabled',
@@ -1194,7 +1198,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             },
           });
         } else {
-          sendResponse(await requestCompanionHealth());
+          const [health, closureLearning] = await Promise.all([
+            requestCompanionHealth(),
+            getLearningSummary(),
+          ]);
+          sendResponse({
+            ...health,
+            closureLearning,
+          });
         }
         break;
       }

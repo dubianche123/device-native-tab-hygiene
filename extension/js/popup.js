@@ -414,9 +414,10 @@ function renderConfidenceCurve(curve = []) {
   }).join('');
 }
 
-function renderMLConsole(status = {}) {
+function renderMLConsole(status = {}, closureLearning = {}) {
   const link = document.getElementById('ml-link');
   const samples = document.getElementById('ml-samples');
+  const closureSamples = document.getElementById('ml-closure-samples');
   const progress = document.getElementById('ml-progress-fill');
   const trainingStatus = document.getElementById('ml-training-status');
   const computePath = document.getElementById('ml-compute-path');
@@ -429,6 +430,9 @@ function renderMLConsole(status = {}) {
   const activityCount = status.activityCount || 0;
   const targetSamples = status.targetTrainingSamples || 1000;
   const minimumSamples = status.minimumTrainingSamples || 100;
+  const totalClosureSamples = closureLearning.totalSamples || status.closureLearning?.totalSamples || 0;
+  const manualClosureSamples = closureLearning.manualCount || status.closureLearning?.manualCount || 0;
+  const autoClosureSamples = closureLearning.autoCount || status.closureLearning?.autoCount || 0;
   const maturity = typeof status.modelMaturity === 'number'
     ? status.modelMaturity
     : Math.min(1, trainingSamples / targetSamples);
@@ -437,12 +441,23 @@ function renderMLConsole(status = {}) {
   link.style.color = status.connected ? 'var(--success)' : 'var(--danger)';
   if (status.modelLoaded) {
     samples.textContent = `${trainingSamples.toLocaleString()} / ${targetSamples.toLocaleString()}`;
+    samples.title = 'Model samples from activity events used to train the idle predictor.';
   } else if (trainingSamples > 0) {
     samples.textContent = `${trainingSamples.toLocaleString()} / ${minimumSamples.toLocaleString()} valid`;
+    samples.title = 'Model samples from activity events used to train the idle predictor.';
   } else if (activityCount > 0) {
     samples.textContent = `0 valid (${activityCount.toLocaleString()} events)`;
+    samples.title = 'Activity events are being collected before the first model training run.';
   } else {
     samples.textContent = `0 / ${minimumSamples.toLocaleString()} valid`;
+    samples.title = 'Activity events are being collected before the first model training run.';
+  }
+
+  if (closureSamples) {
+    closureSamples.textContent = `${manualClosureSamples.toLocaleString()} manual / ${autoClosureSamples.toLocaleString()} auto`;
+    closureSamples.title = totalClosureSamples > 0
+      ? `${totalClosureSamples.toLocaleString()} closure samples total. Manual closes are full-weight learning data; auto cleanup samples are context only.`
+      : 'No closure learning data yet.';
   }
 
   progress.style.width = `${Math.round(Math.max(0, Math.min(1, maturity)) * 100)}%`;
@@ -1012,7 +1027,7 @@ async function updateMLStatus() {
   const status = await sendMessage({ type: 'requestCompanionHealth' });
   const nextStatus = status || {};
   renderMLStatus(nextStatus);
-  renderMLConsole(nextStatus);
+  renderMLConsole(nextStatus, nextStatus.closureLearning || {});
 }
 
 // ── Mode Toggle ──────────────────────────────────────────────────────

@@ -265,7 +265,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category learned 
 
 **Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation.
 
-**Popup UI**: Settings sliders are user-facing maximum close-after times, not abstract model thresholds. Each category row shows the current ML × importance close time and the final used time (`min(ML time, slider cap)`). "Closure Learning" in ML Insights shows per-category stats (manual/auto counts, median foreground dwell, median background age, learned recommendation vs default, delta). Reset button in Settings.
+**Popup UI**: Settings sliders are user-facing maximum close-after times, not abstract model thresholds. Each category row shows the current ML × importance close time and the final used time (`min(ML time, slider cap)`). The ML console separates `Model Samples` (idle-model activity events) from `Closure Samples` (manual / auto close learning). "Closure Learning" in ML Insights shows per-category stats (manual/auto counts, median foreground dwell, median background age, learned recommendation vs default, delta). Reset button in Settings.
 
 **Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `getLearnedThresholds`, `getCategoryClosureStats`, `getLearningSummary`, `resetClosureLearning`.
 

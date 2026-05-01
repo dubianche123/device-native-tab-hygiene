@@ -294,7 +294,7 @@ Neural-Janitor 学到的本地模型文件默认保存在：
 ~/Library/Application Support/Neural-Janitor/backups/
 ```
 
-导入后重启 Chrome / Edge，或者在扩展管理页 reload 插件，让 companion 重新加载模型。随后打开插件 Popup，确认 **Link: Connected**、**Training Samples** 和 ML runtime label 正常显示。
+导入后重启 Chrome / Edge，或者在扩展管理页 reload 插件，让 companion 重新加载模型。随后打开插件 Popup，确认 **Link: Connected**、**Model Samples**、**Closure Samples** 和 ML runtime label 正常显示。
 
 ## Popup 使用方式
 
