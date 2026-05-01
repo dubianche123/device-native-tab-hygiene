@@ -504,7 +504,7 @@ final class IdlePredictor {
         if !lookup.isEmpty {
             return "CPU lookup active; Core ML model artifact is not loaded yet"
         }
-        return "CPU heuristic active; waiting for enough idle/active variety to train Core ML"
+        return "CPU heuristic; awaiting idle/active variety for Core ML"
     }
 
     private func refreshMetricsIfNeeded(activityCount: Int) {

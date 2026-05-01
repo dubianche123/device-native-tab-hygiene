@@ -13,13 +13,13 @@
 **Author**: Leo  
 **Date**: May 2026  
 
-Neural-Janitor is an intelligent browser tab management extension wrapped around Apple's local Machine Learning stack. The visible product is a smart tab closer, but the core subject is a method: how to capture browser behavioral telemetry, compress it locally, and predict user idle states using the Neural Engine (NPU) without ever touching the cloud.
+Neural-Janitor is an intelligent browser extension that cleans up your digital workspace by predicting your actual idle time. It leverages Apple's local Machine Learning stack (Core ML) to learn your habits directly on-device, keeping your browser fast without compromising your privacy.
 
-The project is built around a simple engineering principle:
+Instead of relying on rigid, hardcoded timers to close old tabs, the project is guided by a core idea:
 
-**Tab management should learn from the user, but the learning must happen entirely on-device and at near-zero power cost.**
+**Browser automation should adapt to the user's routine quietly, securely, and with near-zero power cost.**
 
-Underneath the browser extension, the system records lightweight behavioral signals, and the macOS Swift companion app compresses them into training samples. Core ML then evaluates these samples locally on the Apple Neural Engine.
+To achieve this, Neural-Janitor tracks lightweight tab activity entirely locally. The macOS Swift companion app translates this activity into training data, and Core ML runs continuous predictions on the Apple Neural Engine (NPU) to find the perfect moment to clean up your workspace.
 
 ## Runtime Dataflow
 
@@ -85,6 +85,7 @@ Tabs are assigned an idle threshold based on their category. The companion app h
 | Work & Productivity | 14 days | PRs and Jira tickets need time. |
 | Email & Communication | 14 days | Slack/Gmail may need session continuity. |
 | **Finance & Banking** | **30 days** | Banking sessions are precious but not immortal. |
+| **AI Tools** | **30 days** | Long-running research and chat sessions are often intentionally kept around. |
 
 ## Architecture
 
