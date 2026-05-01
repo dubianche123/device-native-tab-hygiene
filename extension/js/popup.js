@@ -1573,12 +1573,14 @@ document.getElementById('btn-ai-cleanup')?.addEventListener('click', async () =>
   btn.textContent = '⏳ Cleaning…';
 
   try {
-    const result = await sendMessage({ type: 'aiCleanup' });
+    const result = await sendMessage({ type: 'aiCleanup', source: 'manual' });
     if (result?.ok) {
       if (result.action === 'none') {
         btn.textContent = '✅ At target';
       } else if (result.action === 'tagged') {
         btn.textContent = `🏷 Tagged ${result.taggedCount}`;
+      } else if (result.action === 'trimmed') {
+        btn.textContent = `🧹 Trimmed ${result.closedCount}`;
       } else {
         btn.textContent = `🧹 Closed ${result.closedCount}`;
       }

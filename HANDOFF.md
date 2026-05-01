@@ -220,7 +220,7 @@ The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an au
 
 **Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, idle-context multiplier, and close reason for stale checks / AI Cleanup. When the Mac is actually idle and the tab is within one day of its learned close time, the tab can be marked for an early close rather than waiting for the exact threshold.
 
-**AI Cleanup scoring**: Uses learned close-time pressure, engagement, and interaction count to rank candidates. `backgroundAgeMs / effectiveClosureTime` is the main pressure term, while category priority is only a weak tie-breaker. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term.
+**AI Cleanup scoring**: Uses learned close-time pressure, engagement, and interaction count to rank candidates. `backgroundAgeMs / effectiveClosureTime` is the main pressure term, while category priority is only a weak tie-breaker. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term. Manual AI Clean may also proactively trim a very small set of low-scoring tabs even before pressure targets are exceeded; automatic cleanup remains pressure-gated.
 
 **Migration**: Old entries without `lastBackgroundedAt` gracefully fall back to `lastVisited`. New entries get both fields populated.
 
@@ -237,7 +237,7 @@ score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 1
 - `effectiveClosureTime` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists, then applies the user's closure time limit.
 - **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
 - High-priority categories such as AI/work are only a weak bias now; long idle time lowers the score, low engagement lowers the score, and interactions raise it.
-- Tab count is the primary stop condition. If tab count starts above `aiCleanupTargetTabs`, cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily.
+- Tab count is the primary stop condition for pressure-driven cleanup. If tab count starts above `aiCleanupTargetTabs`, cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily. When the user manually presses AI Clean and the machine is already under target, the button can still proactively trim up to 3 obviously low-value background tabs.
 
 **Settings**:
 - `aiCleanupTargetMemory` — target memory % after cleanup (default 70%).
@@ -249,7 +249,7 @@ score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 1
 Below memory bar in popup. `getAISuggestion()` in background.js analyzes current state and returns suggestions with levels:
 - 🔴 `critical` — memory ≥ `aiForceCleanupThreshold`.
 - 🟡 `warning` — tab count > `2× aiCleanupTargetTabs`, or memory ≥ target + 10%.
-- 🔵 `info` — tab count > target, stale tabs exist, or memory is slightly above target.
+- 🔵 `info` — tab count > target, stale tabs exist, low-importance tabs are ready to trim, or memory is slightly above target.
 - 🟢 `ok` — everything nominal.
 
 Each suggestion has `action` (button label) and `msg` (explanation). Popup renders clickable cards that trigger the corresponding action and an `Ignore` button. Ignore stores `aiSuggestionsMutedUntil` in settings and suppresses recommendations for 10 minutes.

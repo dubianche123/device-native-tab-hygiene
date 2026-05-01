@@ -1,4 +1,10 @@
 const DEFAULT_CATEGORY_PRIORITY = 50;
+export const PROACTIVE_CLEANUP_POLICY = Object.freeze({
+  scoreThreshold: 14,
+  normalizedImportanceThreshold: 0.5,
+  minBackgroundAgeMs: 30 * 60 * 1000,
+  maxCount: 3,
+});
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -63,5 +69,47 @@ export function computeCleanupScore({
     urgencyBoost,
     blacklistBoost,
     earlyCloseBoost,
+  };
+}
+
+export function shouldProactivelyCleanTab({
+  score = Number.POSITIVE_INFINITY,
+  normalizedImportance = 1,
+  backgroundAgeMs = 0,
+  stale = false,
+} = {}, policy = {}) {
+  const thresholds = {
+    ...PROACTIVE_CLEANUP_POLICY,
+    ...(policy || {}),
+  };
+  const safeScore = Number(score);
+  const safeImportance = clamp(Number(normalizedImportance) || 0, 0, 1);
+  const safeBackgroundAgeMs = Math.max(0, Number(backgroundAgeMs) || 0);
+
+  let reason = 'score_too_high';
+  let eligible = false;
+
+  if (stale) {
+    reason = 'already_stale';
+  } else if (!Number.isFinite(safeScore)) {
+    reason = 'invalid_score';
+  } else if (safeScore > thresholds.scoreThreshold) {
+    reason = 'score_too_high';
+  } else if (safeImportance > thresholds.normalizedImportanceThreshold) {
+    reason = 'importance_too_high';
+  } else if (safeBackgroundAgeMs < thresholds.minBackgroundAgeMs) {
+    reason = 'background_too_recent';
+  } else {
+    reason = 'proactive_low_value';
+    eligible = true;
+  }
+
+  return {
+    eligible,
+    reason,
+    scoreThreshold: thresholds.scoreThreshold,
+    normalizedImportanceThreshold: thresholds.normalizedImportanceThreshold,
+    minBackgroundAgeMs: thresholds.minBackgroundAgeMs,
+    maxCount: thresholds.maxCount,
   };
 }
