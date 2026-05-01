@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Tab Hygiene</title>
+  <link rel="stylesheet" href="css/popup.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header__logo">
+        <img class="header__icon" src="icons/icon32.png" alt="">
+        <h1 class="header__title">Smart Tab Hygiene</h1>
+      </div>
+      <div class="header__actions">
+        <button id="btn-force-check" class="btn btn--icon" title="Run check now">🔍</button>
+        <button id="btn-settings" class="btn btn--icon" title="Settings">⚙️</button>
+      </div>
+    </header>
+
+    <!-- Status Bar -->
+    <div class="status" id="status-bar">
+      <div class="status__main">
+        <span class="status__dot" id="status-dot"></span>
+        <span class="status__text" id="status-text">Loading…</span>
+      </div>
+      <div class="ml-status" id="ml-status" title="Checking local ML runtime">
+        <span class="ml-status__mode">ML</span>
+        <span class="ml-device ml-device--standby">NPU</span>
+        <span class="ml-device ml-device--standby">GPU</span>
+        <span class="ml-device ml-device--standby">CPU</span>
+      </div>
+    </div>
+
+    <div class="ml-console" id="ml-console">
+      <div class="ml-console__row">
+        <span class="ml-console__label">Link</span>
+        <span class="ml-console__value" id="ml-link">Checking</span>
+        <span class="power-light" id="power-light" title="Low Power inference visualizer"></span>
+      </div>
+      <div class="ml-console__row">
+        <span class="ml-console__label">Training Samples</span>
+        <span class="ml-console__value" id="ml-samples">0 / 1,000</span>
+      </div>
+      <div class="ml-progress">
+        <div class="ml-progress__fill" id="ml-progress-fill"></div>
+      </div>
+      <div class="ml-console__row">
+        <span class="ml-console__label">Model Accuracy</span>
+        <span class="ml-console__value" id="ml-accuracy">Collecting</span>
+      </div>
+      <div class="ml-console__row">
+        <span class="ml-console__label">Last Local Retrain</span>
+        <span class="ml-console__value" id="ml-retrain">Not yet</span>
+      </div>
+      <div class="decision-panel">
+        <div class="decision-panel__headline" id="decision-headline">Idle Confidence: --</div>
+        <div class="confidence-curve" id="confidence-curve"></div>
+      </div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <nav class="tabs">
+      <button class="tabs__btn tabs__btn--active" data-tab="active">Active Tabs</button>
+      <button class="tabs__btn" data-tab="closed">Closed Log</button>
+      <button class="tabs__btn" data-tab="predictions">ML Insights</button>
+    </nav>
+
+    <!-- Active Tabs Panel -->
+    <div class="panel" id="panel-active">
+      <div class="panel__header">
+        <span id="active-count">0</span> tracked tabs
+      </div>
+      <div class="tab-list" id="active-tab-list">
+        <div class="empty-state">No tracked tabs</div>
+      </div>
+    </div>
+
+    <!-- Closed Log Panel -->
+    <div class="panel panel--hidden" id="panel-closed">
+      <div class="panel__header">
+        <span id="closed-count">0</span> closed tabs
+        <button id="btn-export" class="btn btn--sm">Export JSON</button>
+      </div>
+      <div class="category-filters" id="category-filters"></div>
+      <div class="tab-list" id="closed-tab-list">
+        <div class="empty-state">No closed tabs yet</div>
+      </div>
+    </div>
+
+    <!-- ML Predictions Panel -->
+    <div class="panel panel--hidden" id="panel-predictions">
+      <div class="panel__header">Idle Window Predictions (Core ML)</div>
+      <div id="predictions-content">
+        <div class="empty-state">No predictions available. Start the companion app.</div>
+      </div>
+    </div>
+
+    <!-- Settings Panel (hidden by default) -->
+    <div class="panel panel--hidden" id="panel-settings">
+      <div class="panel__header">Settings</div>
+      <div class="settings-form" id="settings-form">
+        <label class="setting">
+          <input type="checkbox" id="setting-enabled" checked>
+          <span>Enable auto-cleanup</span>
+        </label>
+        <label class="setting">
+          <input type="checkbox" id="setting-use-companion" checked>
+          <span>Use companion app (Core ML)</span>
+        </label>
+        <div class="setting-group">
+          <h3>Category Thresholds</h3>
+          <div id="threshold-controls"></div>
+        </div>
+        <div class="setting-group">
+          <h3>Whitelist (never close)</h3>
+          <textarea id="setting-whitelist" rows="3" placeholder="One domain per line…"></textarea>
+        </div>
+        <button id="btn-save-settings" class="btn btn--primary">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/popup.js" type="module"></script>
+</body>
+</html>
