@@ -206,7 +206,7 @@ The multiplier is clamped to `0.75x..1.75x`. The model-calculated closure time i
 
 ## Memory Pressure & AI Cleanup
 
-**Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a very compact model/thread label such as `M3 8T`; keep it short or the popup header will overflow. Color: green (<60%), orange (60–80%), red (≥80%).
+**Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a very compact model/thread label such as `M3 8T`; keep it short or the popup header will overflow. Color: green (<60%), orange (60–80%), red (≥80%). The status row also shows a compact `Pkg ~xW` estimate derived from CPU telemetry; exact macOS package watts require privileged `powermetrics`, so do not label this as an exact sensor readout.
 
 **AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
 ```

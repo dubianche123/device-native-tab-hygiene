@@ -50,6 +50,11 @@ function formatPercent(value, digits = 0) {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function formatWatts(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '--W';
+  return value < 10 ? `${value.toFixed(1)}W` : `${Math.round(value)}W`;
+}
+
 function formatDays(value) {
   const days = Number(value) || 0;
   return days >= 10 ? days.toFixed(0) : days.toFixed(1);
@@ -219,9 +224,46 @@ function sendMessage(msg) {
 function shortRuntimeLabel(status = {}) {
   if (status.runtime === 'disabled') return 'OFF';
   if (status.runtime === 'coreml') return 'ML';
-  if (status.runtime === 'lookup') return 'CPU';
-  if (status.runtime === 'heuristic') return 'CPU';
-  return status.connected ? 'ML' : 'CPU';
+  if (status.runtime === 'lookup') return 'Lookup';
+  if (status.runtime === 'heuristic') return 'Heur';
+  return status.connected ? 'ML' : 'Heur';
+}
+
+function estimatePackagePower(cpu = {}) {
+  if (!cpu || cpu.error || typeof cpu.percent !== 'number') return null;
+  const pct = clamp(cpu.percent / 100, 0, 1);
+  const label = shortCPUModel(cpu.model).toLowerCase();
+  let idleWatts = 1.2;
+  let peakWatts = 22;
+
+  if (label.includes('ultra')) {
+    idleWatts = 3.5;
+    peakWatts = 95;
+  } else if (label.includes('max')) {
+    idleWatts = 2.8;
+    peakWatts = 60;
+  } else if (label.includes('pro')) {
+    idleWatts = 2.0;
+    peakWatts = 36;
+  } else if (!label.includes('m1') && !label.includes('m2') && !label.includes('m3') && !label.includes('m4')) {
+    idleWatts = 4.0;
+    peakWatts = 45;
+  }
+
+  return idleWatts + Math.pow(pct, 1.35) * (peakWatts - idleWatts);
+}
+
+function renderPackagePower(power = {}) {
+  const el = document.getElementById('package-power');
+  if (!el) return;
+  const watts = power.watts;
+  const estimated = power.estimated !== false;
+  el.textContent = watts == null ? 'Pkg --W' : `Pkg ${estimated ? '~' : ''}${formatWatts(watts)}`;
+  el.title = power.title || (
+    watts == null
+      ? 'Chip package power unavailable'
+      : 'Estimated chip package power from local CPU telemetry. Exact macOS package watts require privileged powermetrics.'
+  );
 }
 
 function deviceClass(device = {}) {
@@ -1044,6 +1086,7 @@ async function updateCPUUsage() {
       detail.textContent = 'API';
       detail.title = 'CPU API unavailable';
     }
+    renderPackagePower({ watts: null, title: 'Chip package power unavailable because CPU telemetry is unavailable' });
     return;
   }
 
@@ -1057,6 +1100,11 @@ async function updateCPUUsage() {
     detail.textContent = `${model} ${threads}`;
     detail.title = value.title;
   }
+  renderPackagePower({
+    watts: estimatePackagePower(cpu),
+    estimated: true,
+    title: `Estimated chip package power from CPU load on ${cpu.model || 'this Mac'}. Exact package watts require privileged macOS powermetrics.`,
+  });
 
   if (pct >= 80) {
     fill.style.background = 'var(--danger)';

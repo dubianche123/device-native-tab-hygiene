@@ -276,7 +276,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   padding: 8px 12px;
   background: var(--bg-card);
   border-radius: var(--radius);
@@ -289,6 +289,7 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
 .status__text {
@@ -308,6 +309,23 @@ body {
 .status__dot--idle { background: var(--warning); }
 .status__dot--error { background: var(--danger); }
 .status__dot--test { background: #f1c40f; animation: pulse-test 2s ease-in-out infinite; }
+
+.package-power {
+  flex-shrink: 0;
+  max-width: 68px;
+  padding: 4px 5px;
+  border: 1px solid rgba(253, 203, 110, 0.34);
+  border-radius: 6px;
+  background: rgba(253, 203, 110, 0.08);
+  color: var(--warning);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 @keyframes pulse-test {
   0%, 100% { opacity: 1; }
