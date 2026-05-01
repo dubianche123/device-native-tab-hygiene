@@ -44,6 +44,7 @@ import {
 } from './deployment-readiness.js';
 import {
   computeCleanupScore,
+  SAFE_CLEANUP_POLICY,
   PROACTIVE_CLEANUP_POLICY,
   shouldProactivelyCleanTab,
 } from './cleanup-ranking.js';
@@ -746,9 +747,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // Force-trigger AI cleanup if memory exceeds threshold
     const settings = await getSettings();
     if (settings.enabled) {
+      const deployStatus = await deploymentStatus(settings);
       const mem = await getMemoryPressure();
       const forceThreshold = settings.aiForceCleanupThreshold || 85;
-      if (mem.percent >= forceThreshold) {
+      if (deployStatus.mode === DEPLOYMENT_MODES.DEPLOY && mem.percent >= forceThreshold) {
         console.log(`[Neural-Janitor] Memory at ${mem.percent}% >= force threshold ${forceThreshold}% — auto-triggering AI cleanup`);
         await aiCleanup({ source: 'auto' });
       }
@@ -1110,12 +1112,18 @@ async function buildCleanupCandidates(settings = {}, { now = Date.now() } = {}) 
       earlyCloseEligible: retention.earlyCloseEligible,
       nsfw: entry.category === 'nsfw',
     });
-    const proactive = shouldProactivelyCleanTab({
+    const safeCleanup = shouldProactivelyCleanTab({
       score: cleanupScore.score,
       normalizedImportance: retention.normalizedImportance,
       backgroundAgeMs,
       stale: retention.stale,
-    });
+    }, SAFE_CLEANUP_POLICY);
+    const broadCleanup = shouldProactivelyCleanTab({
+      score: cleanupScore.score,
+      normalizedImportance: retention.normalizedImportance,
+      backgroundAgeMs,
+      stale: retention.stale,
+    }, PROACTIVE_CLEANUP_POLICY);
 
     candidates.push({
       tabId,
@@ -1124,8 +1132,12 @@ async function buildCleanupCandidates(settings = {}, { now = Date.now() } = {}) 
       backgroundAgeMs,
       retention,
       cleanupScore,
-      proactiveEligible: proactive.eligible,
-      proactiveReason: proactive.reason,
+      safeEligible: safeCleanup.eligible,
+      safeReason: safeCleanup.reason,
+      broadEligible: broadCleanup.eligible,
+      broadReason: broadCleanup.reason,
+      proactiveEligible: broadCleanup.eligible,
+      proactiveReason: broadCleanup.reason,
     });
   }
 
@@ -1183,25 +1195,44 @@ async function getCPUUsage() {
  * AI Cleanup: close tabs by importance.
  *
  * Manual cleanup can proactively trim a few clearly low-value tabs even when
- * the machine is otherwise under target. Automatic cleanup stays conservative
- * and only acts when tab count or memory pressure actually needs relief.
+ * the machine is otherwise under target, but only after Deploy is actually
+ * active. Automatic cleanup stays conservative and only acts when pressure
+ * really needs relief.
  */
-async function aiCleanup({ source = 'manual' } = {}) {
+async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
   let settings = await getSettings();
   const deployStatus = await deploymentStatus(settings);
   settings = deployStatus.settings;
+  const deploymentMode = deployStatus.mode;
   const targetMemory = settings.aiCleanupTargetMemory || 70;
   const targetTabs = settings.aiCleanupTargetTabs || 30;
   const mem = await getMemoryPressure();
   const now = Date.now();
   const { registry, candidates } = await buildCleanupCandidates(settings, { now });
   const tabCount = Object.keys(registry).length;
-  const testMode = deployStatus.effectiveTestMode;
   const manualSource = source === 'manual';
+  if (deploymentMode !== DEPLOYMENT_MODES.DEPLOY) {
+    return {
+      ok: false,
+      blocked: true,
+      action: 'locked',
+      cleanupMode: 'locked',
+      deploymentMode,
+      memoryBefore: mem.percent,
+      tabCountBefore: tabCount,
+      closedCount: 0,
+      taggedCount: 0,
+      message: 'AI Clean is locked until Deploy is ready',
+    };
+  }
+
+  const profileKey = profile === 'safe' ? 'safe' : 'broad';
+  const profilePolicy = profileKey === 'safe' ? SAFE_CLEANUP_POLICY : PROACTIVE_CLEANUP_POLICY;
+  const profileField = profileKey === 'safe' ? 'safeEligible' : 'broadEligible';
   const tabPressureActive = tabCount > targetTabs;
   const memoryPressureActive = mem.percent > targetMemory;
   const proactiveCandidates = manualSource
-    ? candidates.filter(c => c.proactiveEligible).slice(0, PROACTIVE_CLEANUP_POLICY.maxCount)
+    ? candidates.filter(c => c[profileField]).slice(0, profilePolicy.maxCount)
     : [];
   const canProactivelyClean = manualSource
     && !tabPressureActive
@@ -1213,7 +1244,8 @@ async function aiCleanup({ source = 'manual' } = {}) {
       ok: true,
       action: 'none',
       cleanupMode: 'idle',
-      deploymentMode: deployStatus.mode,
+      cleanupProfile: profileKey,
+      deploymentMode,
       memoryBefore: mem.percent,
       tabCountBefore: tabCount,
       closedCount: 0,
@@ -1226,9 +1258,7 @@ async function aiCleanup({ source = 'manual' } = {}) {
   let currentCount = tabCount;
   const memoryOnlyCloseLimit = tabPressureActive ? Number.POSITIVE_INFINITY : 5;
   const selectedCandidates = canProactivelyClean ? proactiveCandidates : candidates;
-  const cleanupMode = canProactivelyClean ? 'proactive' : 'targeted';
-
-  if (testMode) await clearAllTags();
+  const cleanupMode = canProactivelyClean ? `${profileKey}_trim` : 'targeted';
 
   for (const { tabId, entry, backgroundAgeMs } of selectedCandidates) {
     // Tab count is the primary control target. Memory pressure often does not
@@ -1239,18 +1269,6 @@ async function aiCleanup({ source = 'manual' } = {}) {
       } else if (currentMem <= targetMemory || closedTabs.length >= memoryOnlyCloseLimit) {
         break;
       }
-    }
-
-    if (testMode) {
-      await tagTab(tabId, {
-        reason: cleanupMode === 'proactive' ? 'ai_cleanup_proactive' : 'ai_cleanup',
-        category: entry.category || 'other',
-        title: entry.title || '',
-        url: entry.url || '',
-      });
-      currentCount--;
-      closedTabs.push({ tabId, url: entry.url, title: entry.title, tagged: true });
-      continue;
     }
 
     markProgrammaticClose(tabId, 'auto_cleanup');
@@ -1270,7 +1288,7 @@ async function aiCleanup({ source = 'manual' } = {}) {
       category: categoryKey,
       sessionId,
       closedAt: now,
-      reason: cleanupMode === 'proactive' ? 'ai_cleanup_proactive' : 'ai_cleanup',
+      reason: cleanupMode === 'safe_trim' ? 'ai_cleanup_safe' : (cleanupMode === 'broad_trim' ? 'ai_cleanup_broad' : 'ai_cleanup'),
       lastVisited: entry.lastVisited,
       ageMs: backgroundAgeMs,
       dwellMs: entry.dwellMs || 0,
@@ -1282,7 +1300,7 @@ async function aiCleanup({ source = 'manual' } = {}) {
     await removeTabEntry(tabId);
 
     currentCount--;
-    closedTabs.push({ url: entry.url, title: entry.title, tagged: false });
+    closedTabs.push({ url: entry.url, title: entry.title });
 
     // Re-check memory after every 5 closures
     if (!canProactivelyClean && closedTabs.length % 5 === 0) {
@@ -1291,28 +1309,28 @@ async function aiCleanup({ source = 'manual' } = {}) {
     }
   }
 
-  if (!testMode && closedTabs.length > 0 && !manualSource) {
+  if (closedTabs.length > 0 && !manualSource) {
     await setReturnNotification({
       pending: true,
-      closedTabs: closedTabs.filter(t => !t.tagged),
+      closedTabs,
     });
   }
 
   return {
     ok: true,
-    action: testMode ? 'tagged' : (cleanupMode === 'proactive' ? 'trimmed' : 'closed'),
+    action: cleanupMode === 'targeted' ? 'closed' : 'trimmed',
     cleanupMode,
-    deploymentMode: deployStatus.mode,
+    cleanupProfile: profileKey,
+    deploymentMode,
     memoryBefore: mem.percent,
     tabCountBefore: tabCount,
-    closedCount: testMode ? 0 : closedTabs.length,
-    taggedCount: testMode ? closedTabs.length : 0,
+    closedCount: closedTabs.length,
     tabCountAfter: currentCount,
-    message: testMode
-      ? `Tagged ${closedTabs.length} tab(s) for cleanup`
-      : (cleanupMode === 'proactive'
+    message: cleanupMode === 'safe_trim'
+      ? `Safely trimmed ${closedTabs.length} low-importance tab(s)`
+      : cleanupMode === 'broad_trim'
         ? `Trimmed ${closedTabs.length} low-importance tab(s)`
-        : `Closed ${closedTabs.length} tab(s)`),
+        : `Closed ${closedTabs.length} tab(s)`,
   };
 }
 
@@ -1332,24 +1350,9 @@ async function getAISuggestion() {
   const targetMem = settings.aiCleanupTargetMemory || 70;
   const targetTabs = settings.aiCleanupTargetTabs || 30;
   const forceThreshold = settings.aiForceCleanupThreshold || 85;
-  const mutedUntil = Number(settings.aiSuggestionsMutedUntil || 0);
-
-  if (mutedUntil > now) {
-    return {
-      suggestions: [],
-      muted: true,
-      mutedUntil,
-      memPercent: mem.percent,
-      tabCount,
-      targetMem,
-      targetTabs,
-      forceThreshold,
-      deployReadiness: readiness,
-      deploymentMode: deployStatus.mode,
-    };
-  }
 
   const suggestions = [];
+  const cleanupActionsEnabled = deployStatus.mode === DEPLOYMENT_MODES.DEPLOY;
 
   if (deployStatus.mode === DEPLOYMENT_MODES.TEST) {
     if (!readiness.armable) {
@@ -1395,15 +1398,19 @@ async function getAISuggestion() {
     suggestions.push({
       level: 'warning',
       icon: '📑',
-      text: `${tabCount} open tabs — over 2× your target (${targetTabs}). AI Cleanup will prioritize reducing tab count.`,
-      action: 'aiCleanup',
+      text: cleanupActionsEnabled
+        ? `${tabCount} open tabs — over 2× your target (${targetTabs}). AI Cleanup will prioritize reducing tab count.`
+        : `${tabCount} open tabs — over 2× your target (${targetTabs}). AI Clean is locked until Deploy is ready.`,
+      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
     });
   } else if (tabCount > targetTabs) {
     suggestions.push({
       level: 'info',
       icon: '📋',
-      text: `${tabCount} open tabs — above your target (${targetTabs}).`,
-      action: 'aiCleanup',
+      text: cleanupActionsEnabled
+        ? `${tabCount} open tabs — above your target (${targetTabs}).`
+        : `${tabCount} open tabs — above your target (${targetTabs}). AI Clean is locked until Deploy is ready.`,
+      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
     });
   }
 
@@ -1412,32 +1419,41 @@ async function getAISuggestion() {
     suggestions.push({
       level: 'critical',
       icon: '🔴',
-      text: `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%). Cleanup is bounded because memory may not drop immediately.`,
-      action: 'aiCleanup',
+      text: cleanupActionsEnabled
+        ? `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%). Cleanup is bounded because memory may not drop immediately.`
+        : `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%), but AI Clean is locked until Deploy is ready.`,
+      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
     });
   } else if (mem.percent >= targetMem + 10) {
     suggestions.push({
       level: 'warning',
       icon: '🟠',
-      text: `Memory at ${mem.percent}% — above target (${targetMem}%). Reducing tab count may help, but memory can lag.`,
-      action: 'aiCleanup',
+      text: cleanupActionsEnabled
+        ? `Memory at ${mem.percent}% — above target (${targetMem}%). Reducing tab count may help, but memory can lag.`
+        : `Memory at ${mem.percent}% — above target (${targetMem}%). AI Clean is locked until Deploy is ready.`,
+      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
     });
   } else if (mem.percent >= targetMem) {
     suggestions.push({
       level: 'info',
       icon: '🟡',
-      text: `Memory at ${mem.percent}% — slightly above target (${targetMem}%).`,
+      text: cleanupActionsEnabled
+        ? `Memory at ${mem.percent}% — slightly above target (${targetMem}%).`
+        : `Memory at ${mem.percent}% — slightly above target (${targetMem}%). AI Clean is locked until Deploy is ready.`,
     });
   }
 
   // Stale tabs suggestion
   const { candidates, retentionContext } = await buildCleanupCandidates(settings, { now });
   const staleCount = candidates.filter(candidate => candidate.retention.stale).length;
-  const proactiveCount = candidates.filter(candidate => candidate.proactiveEligible && !candidate.retention.stale).length;
+  const safeTrimCount = candidates.filter(candidate => candidate.safeEligible && !candidate.retention.stale).length;
+  const broadTrimCount = candidates.filter(candidate => candidate.broadEligible && !candidate.retention.stale).length;
   if (staleCount > 0) {
     const staleText = (!deployStatus.effectiveTestMode && retentionContext.currentlyIdle !== true)
       ? `${staleCount} stale tab(s) detected. Check can review them; automatic stale closure waits until the Mac is idle.`
-      : `${staleCount} stale tab(s) detected. Run Check to review them, or AI Clean to close low-importance tabs.`;
+      : cleanupActionsEnabled
+        ? `${staleCount} stale tab(s) detected. Run Check to review them, or AI Clean to close low-importance tabs.`
+        : `${staleCount} stale tab(s) detected. Run Check to review them; AI Clean unlocks after Deploy is ready.`;
     suggestions.push({
       level: 'info',
       icon: '🧹',
@@ -1445,12 +1461,29 @@ async function getAISuggestion() {
       action: 'forceCheck',
     });
   }
-  if (proactiveCount > 0 && staleCount === 0) {
+  if (cleanupActionsEnabled && broadTrimCount > 0) {
+    const safeButtonLabel = `🧊 Clean safest ${Math.max(1, Math.min(safeTrimCount || broadTrimCount, SAFE_CLEANUP_POLICY.maxCount))}`;
+    const broadButtonLabel = `🧹 Clean more ${Math.max(1, Math.min(broadTrimCount, PROACTIVE_CLEANUP_POLICY.maxCount))}`;
     suggestions.push({
       level: 'info',
-      icon: '🪄',
-      text: `${proactiveCount} low-importance tab(s) are ready to trim. AI Clean will close the weakest ones.`,
-      action: 'aiCleanup',
+      icon: safeTrimCount > 0 ? '🧊' : '🪄',
+      text: safeTrimCount > 0
+        ? `${safeTrimCount} tab(s) are almost certainly the weakest ones. ${Math.max(0, broadTrimCount - safeTrimCount)} more low-importance tab(s) can be trimmed if you want to be broader.`
+        : `${broadTrimCount} low-importance tab(s) are ready to trim.`,
+      actions: safeTrimCount > 0
+        ? [
+            { action: 'aiCleanupSafe', label: safeButtonLabel },
+            { action: 'aiCleanupBroad', label: broadButtonLabel },
+          ]
+        : [
+            { action: 'aiCleanupBroad', label: broadButtonLabel },
+          ],
+    });
+  } else if (!cleanupActionsEnabled && broadTrimCount > 0) {
+    suggestions.push({
+      level: 'info',
+      icon: '🔒',
+      text: `${broadTrimCount} low-importance tab(s) are being tracked. AI Clean unlocks after Deploy is ready.`,
     });
   }
 
@@ -1691,7 +1724,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await getCPUUsage());
         break;
       case 'aiCleanup':
-        sendResponse(await aiCleanup({ source: msg.source || 'manual' }));
+        sendResponse(await aiCleanup({ source: msg.source || 'manual', profile: msg.profile || 'broad' }));
         break;
       case 'getTaggedTabs':
         sendResponse(await getTaggedTabs());

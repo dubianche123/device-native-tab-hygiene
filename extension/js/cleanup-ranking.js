@@ -1,10 +1,19 @@
 const DEFAULT_CATEGORY_PRIORITY = 50;
-export const PROACTIVE_CLEANUP_POLICY = Object.freeze({
+export const SAFE_CLEANUP_POLICY = Object.freeze({
+  scoreThreshold: 0,
+  normalizedImportanceThreshold: 0.3,
+  minBackgroundAgeMs: 60 * 60 * 1000,
+  maxCount: 2,
+});
+
+export const BROAD_CLEANUP_POLICY = Object.freeze({
   scoreThreshold: 14,
   normalizedImportanceThreshold: 0.5,
   minBackgroundAgeMs: 30 * 60 * 1000,
-  maxCount: 3,
+  maxCount: 5,
 });
+
+export const PROACTIVE_CLEANUP_POLICY = BROAD_CLEANUP_POLICY;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -79,7 +88,7 @@ export function shouldProactivelyCleanTab({
   stale = false,
 } = {}, policy = {}) {
   const thresholds = {
-    ...PROACTIVE_CLEANUP_POLICY,
+    ...BROAD_CLEANUP_POLICY,
     ...(policy || {}),
   };
   const safeScore = Number(score);

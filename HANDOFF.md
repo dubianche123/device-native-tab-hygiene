@@ -220,7 +220,7 @@ The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an au
 
 **Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, idle-context multiplier, and close reason for stale checks / AI Cleanup. When the Mac is actually idle and the tab is within one day of its learned close time, the tab can be marked for an early close rather than waiting for the exact threshold.
 
-**AI Cleanup scoring**: Uses learned close-time pressure, engagement, and interaction count to rank candidates. `backgroundAgeMs / effectiveClosureTime` is the main pressure term, while category priority is only a weak tie-breaker. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term. Manual AI Clean may also proactively trim a very small set of low-scoring tabs even before pressure targets are exceeded; automatic cleanup remains pressure-gated.
+**AI Cleanup scoring**: Uses learned close-time pressure, engagement, and interaction count to rank candidates. `backgroundAgeMs / effectiveClosureTime` is the main pressure term, while category priority is only a weak tie-breaker. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term. Manual AI Clean may also proactively trim a very small set of low-scoring tabs, but only in Deploy. Automatic cleanup remains pressure-gated and also requires Deploy.
 
 **Migration**: Old entries without `lastBackgroundedAt` gracefully fall back to `lastVisited`. New entries get both fields populated.
 
@@ -228,7 +228,7 @@ The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an au
 
 **Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a very compact model/thread label such as `M3 8T`; keep it short or the popup header will overflow. Color: green (<60%), orange (60–80%), red (≥80%). The status row also shows a compact `Pkg ~xW` estimate derived from CPU telemetry; exact macOS package watts require privileged `powermetrics`, so do not label this as an exact sensor readout.
 
-**AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
+**AI Cleanup button** (🤖, popup header): Locked in Test / Armed; only Deploy can actually clean. Sends `aiCleanup` message to background with `profile` (`safe` or `broad`). Scoring:
 ```
 score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 14 - min(90, backgroundAgeMs / effectiveClosureTime × 80) - learnedShortness × 24
 ```
@@ -237,7 +237,7 @@ score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 1
 - `effectiveClosureTime` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists, then applies the user's closure time limit.
 - **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
 - High-priority categories such as AI/work are only a weak bias now; long idle time lowers the score, low engagement lowers the score, and interactions raise it.
-- Tab count is the primary stop condition for pressure-driven cleanup. If tab count starts above `aiCleanupTargetTabs`, cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily. When the user manually presses AI Clean and the machine is already under target, the button can still proactively trim up to 3 obviously low-value background tabs.
+- Tab count is the primary stop condition for pressure-driven cleanup. If tab count starts above `aiCleanupTargetTabs`, cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily. When Deploy is active and the user manually presses AI Clean, the button can still proactively trim up to 2 safe tabs or 5 broader tabs, depending on the selected profile.
 
 **Settings**:
 - `aiCleanupTargetMemory` — target memory % after cleanup (default 70%).
@@ -252,7 +252,7 @@ Below memory bar in popup. `getAISuggestion()` in background.js analyzes current
 - 🔵 `info` — tab count > target, stale tabs exist, low-importance tabs are ready to trim, or memory is slightly above target.
 - 🟢 `ok` — everything nominal.
 
-Each suggestion has `action` (button label) and `msg` (explanation). Popup renders clickable cards that trigger the corresponding action and an `Ignore` button. Ignore stores `aiSuggestionsMutedUntil` in settings and suppresses recommendations for 10 minutes.
+Each suggestion has `action` or `actions` plus `text`. Popup renders clickable cards that trigger the corresponding action, including paired safe/broad AI Clean buttons for low-importance tabs. Safe/broad AI Clean actions stay disabled unless Deploy is active. There is no Ignore button anymore.
 
 Popup refresh behavior: `Check`, `AI Clean`, mode changes, holiday-calendar changes, and settings saves all refresh AI Suggestions. A low-frequency 30s timer also refreshes suggestions while the popup stays open.
 

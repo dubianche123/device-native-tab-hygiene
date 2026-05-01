@@ -330,7 +330,6 @@ const DEFAULT_SETTINGS = {
   idleSchedule: DEFAULT_IDLE_SCHEDULE,
   deploymentMode: DEPLOYMENT_MODES.TEST,
   testMode: true,
-  aiSuggestionsMutedUntil: 0,
   aiCleanupTargetMemory: 70,
   aiCleanupTargetTabs: 30,
   aiForceCleanupThreshold: 85,

@@ -425,13 +425,21 @@ body {
   font-size: 11px;
   padding: 4px 8px;
   border-radius: 6px;
+  flex-wrap: wrap;
 }
 
 .ai-suggestion__text {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ai-suggestion__actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .ai-suggestion--critical {
@@ -454,9 +462,25 @@ body {
   color: #27ae60;
 }
 
-.ai-suggestion__action,
-.ai-suggestion__ignore {
+.ai-suggestion__action {
   flex-shrink: 0;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ai-suggestion__action:hover {
+  border-color: var(--accent-light);
+  background: rgba(108, 92, 231, 0.14);
+}
+
+.ai-suggestion__action--primary {
+  border-color: rgba(162, 155, 254, 0.7);
+  color: var(--accent-light);
+}
+
+.ai-suggestion__action--secondary {
+  color: var(--text-muted);
 }
 
 .btn--xs {

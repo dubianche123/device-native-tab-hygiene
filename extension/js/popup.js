@@ -20,7 +20,6 @@ const IMPORTANCE_MULTIPLIER_MIN = 0.75;
 const IMPORTANCE_MULTIPLIER_MAX = 1.75;
 const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const AI_SUGGESTION_MUTE_MS = 10 * 60 * 1000;
 const CLOSE_READINESS_TARGET_MANUAL = 10;
 const CLOSE_READINESS_TARGET_BUCKETS = 3;
 
@@ -1401,6 +1400,7 @@ async function updateStatus(preloadedSettings = null) {
   const dot = document.getElementById('status-dot');
   const text = document.getElementById('status-text');
   updateModeToggle(settings);
+  updateAICleanupButtonState(settings);
 
   if (!settings.enabled) {
     dot.className = 'status__dot';
@@ -1454,6 +1454,21 @@ function updateModeToggle(settings = {}) {
     deployBtn.classList.add('mode-toggle__btn--active');
     testBtn.classList.remove('mode-toggle__btn--active');
   }
+}
+
+function updateAICleanupButtonState(settings = {}) {
+  const btn = document.getElementById('btn-ai-cleanup');
+  if (!btn) return;
+
+  const mode = normalizeDeploymentMode(settings);
+  const status = settings.deploymentStatus || {};
+  const locked = mode !== DEPLOYMENT_MODES.DEPLOY || status.blocked === true;
+
+  btn.disabled = locked;
+  btn.textContent = locked ? '🔒 AI Locked' : '🧹 AI Clean';
+  btn.title = locked
+    ? 'AI Clean unlocks after Deploy is ready'
+    : 'Clean low-importance tabs with the current learning model';
 }
 
 async function setMode(mode) {
@@ -1573,19 +1588,21 @@ document.getElementById('btn-ai-cleanup')?.addEventListener('click', async () =>
   btn.textContent = '⏳ Cleaning…';
 
   try {
-    const result = await sendMessage({ type: 'aiCleanup', source: 'manual' });
+    const result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'broad' });
     if (result?.ok) {
       if (result.action === 'none') {
         btn.textContent = '✅ At target';
-      } else if (result.action === 'tagged') {
-        btn.textContent = `🏷 Tagged ${result.taggedCount}`;
-      } else if (result.action === 'trimmed') {
+      } else if (result.cleanupMode === 'safe_trim') {
+        btn.textContent = `🧊 Safe ${result.closedCount}`;
+      } else if (result.cleanupMode === 'broad_trim') {
         btn.textContent = `🧹 Trimmed ${result.closedCount}`;
-      } else {
+      } else if (result.action === 'closed') {
         btn.textContent = `🧹 Closed ${result.closedCount}`;
+      } else {
+        btn.textContent = '🧹 Done';
       }
     } else {
-      btn.textContent = '❌ Error';
+      btn.textContent = result?.blocked ? '🔒 Locked' : '❌ Error';
     }
   } catch {
     btn.textContent = '❌ Error';
@@ -1593,7 +1610,9 @@ document.getElementById('btn-ai-cleanup')?.addEventListener('click', async () =>
 
   setTimeout(() => {
     btn.disabled = false;
-    btn.textContent = '🧹 AI Clean';
+    sendMessage({ type: 'getSettings' })
+      .then(settings => updateAICleanupButtonState(settings || {}))
+      .catch(() => updateAICleanupButtonState({}));
   }, 3000);
 
   await loadActiveTabs();
@@ -1613,15 +1632,6 @@ async function updateAISuggestions() {
   const container = document.getElementById('ai-suggestions-list');
   if (!container) return;
 
-  if (data.muted) {
-    container.innerHTML = `
-      <div class="ai-suggestion ai-suggestion--ok">
-        <span>⏸</span>
-        <span class="ai-suggestion__text">Suggestions muted for ${escapeHTML(formatRemaining((data.mutedUntil || 0) - Date.now()))}</span>
-      </div>`;
-    return;
-  }
-
   const levelClass = {
     critical: 'ai-suggestion--critical',
     warning: 'ai-suggestion--warning',
@@ -1629,15 +1639,29 @@ async function updateAISuggestions() {
     ok: 'ai-suggestion--ok',
   };
 
+  const actionLabel = {
+    aiCleanupSafe: '🧊 Clean safest',
+    aiCleanupBroad: '🧹 Clean more',
+    aiCleanup: '🧹 Clean',
+    forceCheck: '🔍 Review',
+    armDeploy: '⏳ Arm',
+    setModeDeploy: '🚀 Deploy',
+    setModeTest: '🧪 Test',
+  };
+
   container.innerHTML = data.suggestions.map(s => {
     const cls = levelClass[s.level] || 'ai-suggestion--info';
-    const btn = s.action
-      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : s.action === 'forceCheck' ? '🔍 Review' : s.action === 'armDeploy' ? '⏳ Arm' : s.action === 'setModeDeploy' ? '🚀 Deploy' : s.action === 'setModeTest' ? '🧪 Test' : 'Open'}</button>`
+    const actions = Array.isArray(s.actions) && s.actions.length > 0
+      ? s.actions
+      : (s.action ? [{ action: s.action, label: actionLabel[s.action] || 'Open' }] : []);
+    const buttons = actions.length > 0
+      ? `<span class="ai-suggestion__actions">${
+        actions.map((action, index) => `
+          <button class="btn btn--xs ai-suggestion__action ${index === 0 ? 'ai-suggestion__action--primary' : 'ai-suggestion__action--secondary'}" data-action="${escapeHTML(action.action)}">${escapeHTML(action.label || actionLabel[action.action] || 'Open')}</button>
+        `).join('')
+      }</span>`
       : '';
-    const ignore = s.level !== 'ok' || s.action
-      ? '<button class="btn btn--xs ai-suggestion__ignore" title="Hide AI Suggestions for 10 minutes">Ignore</button>'
-      : '';
-    return `<div class="ai-suggestion ${cls}"><span>${s.icon}</span><span class="ai-suggestion__text">${escapeHTML(s.text)}</span>${btn}${ignore}</div>`;
+    return `<div class="ai-suggestion ${cls}"><span>${s.icon}</span><span class="ai-suggestion__text">${escapeHTML(s.text)}</span>${buttons}</div>`;
   }).join('');
 
   container.querySelectorAll('.ai-suggestion__action').forEach(btn => {
@@ -1645,27 +1669,37 @@ async function updateAISuggestions() {
       const action = btn.dataset.action;
       btn.disabled = true;
       btn.textContent = '⏳';
-      if (action === 'aiCleanup') {
-        document.getElementById('btn-ai-cleanup')?.click();
-      } else if (action === 'forceCheck') {
-        document.getElementById('btn-force-check')?.click();
-      } else if (action === 'setModeDeploy' || action === 'armDeploy') {
-        await setMode(DEPLOYMENT_MODES.DEPLOY);
-      } else if (action === 'setModeTest') {
-        await setMode(DEPLOYMENT_MODES.TEST);
+      try {
+        let result = null;
+        if (action === 'aiCleanupSafe') {
+          result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'safe' });
+        } else if (action === 'aiCleanupBroad' || action === 'aiCleanup') {
+          result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'broad' });
+        } else if (action === 'forceCheck') {
+          document.getElementById('btn-force-check')?.click();
+        } else if (action === 'setModeDeploy' || action === 'armDeploy') {
+          result = await setMode(DEPLOYMENT_MODES.DEPLOY);
+        } else if (action === 'setModeTest') {
+          result = await setMode(DEPLOYMENT_MODES.TEST);
+        }
+
+        if (result?.blocked) {
+          btn.textContent = '🔒';
+        } else if (result?.cleanupMode === 'safe_trim') {
+          btn.textContent = '🧊';
+        } else if (result?.cleanupMode === 'broad_trim' || result?.action === 'closed') {
+          btn.textContent = '🧹';
+        } else if (result?.ok) {
+          btn.textContent = '✓';
+        } else if (action === 'forceCheck') {
+          btn.textContent = '🔍';
+        } else {
+          btn.textContent = '❌';
+        }
+      } catch {
+        btn.textContent = '❌';
       }
       setTimeout(() => updateAISuggestions(), 2000);
-    });
-  });
-
-  container.querySelectorAll('.ai-suggestion__ignore').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      await sendMessage({
-        type: 'updateSettings',
-        settings: { aiSuggestionsMutedUntil: Date.now() + AI_SUGGESTION_MUTE_MS },
-      });
-      await updateAISuggestions();
     });
   });
 }
