@@ -13,6 +13,10 @@ import { getUpcomingHolidays, getRestDayLevel, getHolidayName, getExtendedPeriod
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+const IMPORTANCE_MULTIPLIER_MIN = 0.75;
+const IMPORTANCE_MULTIPLIER_MAX = 1.75;
+const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
+
 function formatAge(ms) {
   ms = Math.max(0, ms || 0);
   const mins = Math.floor(ms / 60_000);
@@ -95,6 +99,39 @@ function liveDwellMs(entry) {
     return base + Math.max(0, Date.now() - entry.lastActivatedAt);
   }
   return base;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function importanceMultiplierFor(entry, backgroundAgeMs) {
+  const foregroundDwellMs = Math.max(0, entry?.dwellMs || 0);
+  const safeBackgroundAgeMs = Math.max(0, backgroundAgeMs || 0);
+  const totalObservedMs = foregroundDwellMs + safeBackgroundAgeMs;
+  const focusRatio = totalObservedMs > 0 ? foregroundDwellMs / totalObservedMs : 0;
+  const normalizedImportance = clamp(focusRatio, 0, 1);
+  return IMPORTANCE_MULTIPLIER_MIN
+    + normalizedImportance * (IMPORTANCE_MULTIPLIER_MAX - IMPORTANCE_MULTIPLIER_MIN);
+}
+
+function effectiveMaxAgeFor(entry, backgroundAgeMs, settings = {}, learnedThresholds = {}) {
+  const categoryKey = entry.category || 'other';
+  const cat = CATEGORIES[categoryKey] || DEFAULT_CATEGORY;
+  const customThreshold = settings.customThresholds?.[categoryKey];
+  if (typeof customThreshold === 'number' && customThreshold > 0) return customThreshold;
+
+  const learnedThreshold = learnedThresholds[categoryKey];
+  if (typeof learnedThreshold === 'number' && learnedThreshold > 0) {
+    const defaultThreshold = cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
+    return clamp(
+      learnedThreshold * importanceMultiplierFor(entry, backgroundAgeMs),
+      MIN_EFFECTIVE_THRESHOLD_MS,
+      defaultThreshold * 2,
+    );
+  }
+
+  return cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
 }
 
 function faviconURL(entry) {
@@ -407,10 +444,7 @@ async function loadActiveTabs() {
       : Date.now() - (entry.lastVisited || Date.now());
     const isCurrentlyActive = entry.active === true;
     const dwell = liveDwellMs(entry);
-    const maxAge = settings.customThresholds?.[entry.category]
-      || learnedThresholds[entry.category]
-      || cat.maxAgeMs
-      || DEFAULT_CATEGORY.maxAgeMs;
+    const maxAge = effectiveMaxAgeFor(entry, backgroundAge, settings, learnedThresholds);
     const pct = isCurrentlyActive ? 0 : Math.min(100, (backgroundAge / maxAge) * 100);
     const urgencyClass = pct > 80 ? 'color: var(--danger)' : pct > 50 ? 'color: var(--warning)' : '';
     const favicon = faviconURL(entry);

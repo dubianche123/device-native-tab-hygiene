@@ -27,7 +27,7 @@ import {
   getActiveSession, setActiveSession, clearActiveSession,
   getTaggedTabs, tagTab, untagTab, clearAllTags,
 } from './storage.js';
-import { categorizePage, isTabStale } from './categorizer.js';
+import { categorizePage, getMaxAgeMs } from './categorizer.js';
 import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary, resetClosureLearning } from './closure-learner.js';
 import {
   classifyURL,
@@ -39,6 +39,9 @@ import {
 } from './idle-detector.js';
 
 const programmaticCloseReasons = new Map();
+const IMPORTANCE_MULTIPLIER_MIN = 0.75;
+const IMPORTANCE_MULTIPLIER_MAX = 1.75;
+const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
 
 function isTrackableUrl(url) {
   return Boolean(url)
@@ -72,6 +75,66 @@ function closureAgeMs(entry, now = Date.now()) {
 
 function backgroundReferenceTime(entry, now = Date.now()) {
   return entry?.lastBackgroundedAt || entry?.lastVisited || entry?.openedAt || now;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizedTabImportance(entry, backgroundAgeMs) {
+  const foregroundDwellMs = Math.max(0, entry?.dwellMs || 0);
+  const safeBackgroundAgeMs = Math.max(0, backgroundAgeMs || 0);
+  const totalObservedMs = foregroundDwellMs + safeBackgroundAgeMs;
+  const focusRatio = totalObservedMs > 0 ? foregroundDwellMs / totalObservedMs : 0;
+  const normalizedImportance = clamp(focusRatio, 0, 1);
+  const importanceMultiplier = IMPORTANCE_MULTIPLIER_MIN
+    + normalizedImportance * (IMPORTANCE_MULTIPLIER_MAX - IMPORTANCE_MULTIPLIER_MIN);
+
+  return {
+    foregroundDwellMs,
+    backgroundAgeMs: safeBackgroundAgeMs,
+    focusRatio,
+    normalizedImportance,
+    importanceMultiplier,
+  };
+}
+
+function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now()) {
+  const categoryKey = entry.category || 'other';
+  const backgroundAgeMs = closureAgeMs(entry, now);
+  const importance = normalizedTabImportance(entry, backgroundAgeMs);
+  const customThreshold = settings.customThresholds?.[categoryKey];
+  const hasCustomThreshold = typeof customThreshold === 'number' && customThreshold > 0;
+  const learnedThreshold = learnedThresholds?.[categoryKey];
+  const hasLearnedThreshold = typeof learnedThreshold === 'number' && learnedThreshold > 0;
+  const defaultThreshold = CATEGORIES[categoryKey]?.maxAgeMs || CATEGORIES.other?.maxAgeMs || 7 * 24 * 60 * 60 * 1000;
+  const baseThresholdMs = getMaxAgeMs(
+    categoryKey,
+    hasCustomThreshold ? settings.customThresholds : {},
+    learnedThresholds,
+  );
+
+  let maxAgeMs = baseThresholdMs;
+  let thresholdSource = hasCustomThreshold ? 'custom' : (hasLearnedThreshold ? 'learned' : 'default');
+
+  if (!hasCustomThreshold && hasLearnedThreshold) {
+    maxAgeMs = clamp(
+      learnedThreshold * importance.importanceMultiplier,
+      MIN_EFFECTIVE_THRESHOLD_MS,
+      defaultThreshold * 2,
+    );
+    thresholdSource = 'learned_x_importance';
+  }
+
+  return {
+    ...importance,
+    categoryKey,
+    baseThresholdMs,
+    maxAgeMs,
+    thresholdSource,
+    stale: backgroundAgeMs > maxAgeMs,
+    reason: backgroundAgeMs > maxAgeMs ? 'exceeded_background_threshold' : 'within_threshold',
+  };
 }
 
 // ── Protected Tabs ───────────────────────────────────────────────────
@@ -573,10 +636,7 @@ async function performStaleCheck() {
     if (settings.whitelist.some(w => entry.url?.includes(w))) continue;
 
     const categoryKey = entry.category || 'other';
-    // Use time since the tab left foreground for stale checks.
-    // Old entries fall back to lastVisited/openedAt.
-    const staleSince = backgroundReferenceTime(entry, now);
-    const result = isTabStale(staleSince, categoryKey, settings.customThresholds, learnedThresholds);
+    const result = tabRetentionProfile(entry, settings, learnedThresholds, now);
 
     if (!result.stale) continue;
     staleCount++;
@@ -588,7 +648,7 @@ async function performStaleCheck() {
     if (categoryKey !== 'nsfw') {
       // For non-NSFW categories, prefer closing during idle windows
       // but close anyway if age exceeds 2x the threshold (safety net)
-      if (!closeWindowIsQuiet && result.ageMs < result.maxAgeMs * 2) {
+      if (!closeWindowIsQuiet && result.backgroundAgeMs < result.maxAgeMs * 2) {
         shouldClose = false;
       }
     }
@@ -601,7 +661,7 @@ async function performStaleCheck() {
     if (testMode) {
       // Test mode: tag the tab instead of closing it
       await tagTab(tabId, {
-        reason: `stale_${Math.round(result.ageMs / (1000 * 60 * 60))}h`,
+        reason: `stale_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
         category: categoryKey,
         title: entry.title || '',
         url: entry.url || '',
@@ -611,7 +671,7 @@ async function performStaleCheck() {
         url: entry.url,
         title: entry.title,
         category: categoryKey,
-        ageMs: result.ageMs,
+        ageMs: result.backgroundAgeMs,
       });
       continue;
     }
@@ -634,9 +694,9 @@ async function performStaleCheck() {
       category: categoryKey,
       sessionId,
       closedAt: now,
-      reason: `idle_${Math.round(result.ageMs / (1000 * 60 * 60))}h`,
+      reason: `idle_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
       lastVisited: entry.lastVisited,
-      ageMs: result.ageMs,
+      ageMs: result.backgroundAgeMs,
       dwellMs: entry.dwellMs || 0,
       interactions: entry.interactions || 0,
     });
@@ -648,7 +708,7 @@ async function performStaleCheck() {
       title: entry.title,
       favIconUrl: entry.favIconUrl || '',
       category: categoryKey,
-      ageMs: result.ageMs,
+      ageMs: result.backgroundAgeMs,
       dwellMs: entry.dwellMs || 0,
     });
 
@@ -778,6 +838,7 @@ async function aiCleanup() {
 
   const whitelist = Array.isArray(settings.whitelist) ? settings.whitelist : [];
   const protectedTabs = await getProtectedTabIds();
+  const learnedThresholds = await getLearnedThresholds();
 
   // Build scored list of closeable tabs
   const candidates = [];
@@ -789,26 +850,20 @@ async function aiCleanup() {
 
     const catInfo = CATEGORIES[entry.category] || {};
     const priority = catInfo.priority ?? 50;
-    // Use backgroundAgeMs (time since tab left foreground) for idle penalty
-    const backgroundAgeMs = closureAgeMs(entry, now);
-    const idleHours = Math.max(1, backgroundAgeMs / (1000 * 60 * 60));
+    const retention = tabRetentionProfile(entry, settings, learnedThresholds, now);
+    const backgroundAgeMs = retention.backgroundAgeMs;
     const interactions = Math.max(1, entry.interactions || 0);
 
-    // Foreground ratio: tabs with high foreground/total time are likely important
-    const foregroundDwellMs = entry.dwellMs || 0;
-    const totalAgeMs = foregroundDwellMs + backgroundAgeMs;
-    const focusRatio = totalAgeMs > 0 ? foregroundDwellMs / totalAgeMs : 0;
-    const focusProtection = focusRatio * 12; // up to +12 for heavily-used tabs
-
     // Score: lower = close first. Priority protects important categories;
-    // long background time lowers the score, interactions raise it.
+    // high background-threshold pressure lowers the score, interactions raise it.
     const interactionProtection = Math.log2(interactions + 1) * 8;
-    const idlePenalty = Math.min(72, idleHours) * 1.2;
+    const thresholdPressure = retention.maxAgeMs > 0 ? backgroundAgeMs / retention.maxAgeMs : 0;
+    const idlePenalty = Math.min(72, thresholdPressure * 24);
     const score = entry.category === 'nsfw'
       ? -1000
-      : priority + interactionProtection + focusProtection - idlePenalty;
+      : priority + interactionProtection - idlePenalty;
 
-    candidates.push({ tabId, entry, score, backgroundAgeMs });
+    candidates.push({ tabId, entry, score, backgroundAgeMs, retention });
   }
 
   // Sort by score ascending (least important first)
@@ -958,13 +1013,7 @@ async function getAISuggestion() {
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
     if (protectedTabs.has(tabId)) continue;
-    const cat = entry.category || 'other';
-    const result = isTabStale(
-      backgroundReferenceTime(entry, now),
-      cat,
-      settings.customThresholds,
-      learnedThresholds,
-    );
+    const result = tabRetentionProfile(entry, settings, learnedThresholds, now);
     if (result.stale) staleCount++;
   }
   if (staleCount > 0) {

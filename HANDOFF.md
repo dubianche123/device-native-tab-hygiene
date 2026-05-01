@@ -185,11 +185,19 @@ Both `performStaleCheck()` and `aiCleanup()` skip all protected tab IDs. This pr
 - `closeActiveSession()`: sets `lastBackgroundedAt = now` on the tab entry.
 - `checkpointActiveSession()`: preserves `lastForegroundAt`.
 
-**Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions use the background clock (`now - lastBackgroundedAt`); foreground dwell, interaction count, and focus ratio feed learning/scoring only.
+**Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions compare the background clock (`now - lastBackgroundedAt`) against an effective threshold. For learned categories, that threshold is:
+
+```
+effectiveThreshold = learnedManualThreshold × importanceMultiplier
+importanceMultiplier = 0.75 + normalizedFocusRatio × 1.0
+normalizedFocusRatio = clamp(foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs), 0, 1)
+```
+
+The multiplier is clamped to `0.75x..1.75x`, and the final threshold is capped to `[1 min, 2× category default]`. User custom thresholds are hard overrides and are not multiplied.
 
 **Stale detection**: `isTabStale()` now receives a background reference timestamp from `backgroundReferenceTime(entry)`, which prefers `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries.
 
-**AI Cleanup scoring**: Uses `backgroundAgeMs` (= `now - lastBackgroundedAt`) for idle penalty, plus `focusRatio = foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs)` to protect heavily-used tabs (+12 score bonus).
+**AI Cleanup scoring**: Uses `backgroundAgeMs / effectiveThreshold` as threshold pressure. Foreground/background importance is already baked into `effectiveThreshold`, so do not add a separate focus-ratio protection term.
 
 **Migration**: Old entries without `lastBackgroundedAt` gracefully fall back to `lastVisited`. New entries get both fields populated.
 
@@ -199,12 +207,11 @@ Both `performStaleCheck()` and `aiCleanup()` skip all protected tab IDs. This pr
 
 **AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
 ```
-score = categoryPriority + log₂(interactions + 1) × 8 + focusRatio × 12 - min(72, bgIdleHours) × 1.2
+score = categoryPriority + log₂(interactions + 1) × 8 - min(72, backgroundAgeMs / effectiveThreshold × 24)
 ```
 - NSFW categories get score -1000 (always closed first).
 - Lower score = more likely to be closed.
-- `bgIdleHours` = hours since tab left foreground (`lastBackgroundedAt`), not since last visit.
-- `focusRatio` = `foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs)` — heavily-used tabs get up to +12 protection.
+- `effectiveThreshold` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists.
 - **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
 - High-priority categories such as AI/work are protected; long idle time lowers the score; interactions raise it.
 - Re-checks memory every 5 closures; stops if pressure < target.
