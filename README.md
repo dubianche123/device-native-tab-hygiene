@@ -116,6 +116,7 @@ Neural-Janitor uses a narrower but smarter model role. It builds a `MLBoostedTre
 
 - **Test / Deploy modes**: Test mode learns your browsing pattern and tags tabs that would be closed. Deploy mode actually closes stale tabs and records them in the local closed-tab log.
 - **Category-aware retention**: AI tools, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and uncategorized pages each get their own default timeout. Every category threshold is adjustable in Settings with a slider and number input up to 30 days.
+- **Manual closure learning**: Browser tab closes and the popup's Close & Log action become local learning samples. Neural-Janitor uses meaningful foreground dwell time from manual closes to adapt category thresholds, while automatic cleanup samples are kept as context only so the system does not reinforce its own decisions.
 - **AI Tools category**: ChatGPT, Claude, Gemini, DeepSeek, Hugging Face, Perplexity, Qwen, Kimi, Doubao, and similar tools are classified separately and default to a 30-day retention window.
 - **Holiday-aware idle predictions**: Settings can enable Japanese or Chinese holiday calendars. The ML Insights panel marks each predicted day as Workday, Weekend, or a named holiday / extended period such as Golden Week or National Day.
 - **AI Cleanup**: The popup can close or tag low-importance tabs until memory pressure and tab count targets are met. It protects high-priority categories such as AI tools and work tabs, honors the whitelist, and respects Test mode.
@@ -152,18 +153,21 @@ The system is split into two deployable artifacts:
 ### 1. Tab Interaction Tracker
 Tracks `openedAt`, `lastVisited`, `dwellMs` (cumulative foreground time), and `interactions`. When a tab is closed, these metrics are preserved in a `chrome.sessions` bound log so it can be restored exactly as it was.
 
-### 2. Local Page Classifier
+### 2. Manual Closure Learner
+Real browser closes (`Ctrl+W` / close button) and popup closes are stored in `chrome.storage.local` as closure-learning samples with category, dwell time, idle age, interaction count, and close time. Learned thresholds are based on manual foreground dwell samples only; programmatic closes from stale checks and AI Cleanup are explicitly suppressed from the browser-close path and recorded as context-only auto samples.
+
+### 3. Local Page Classifier
 When the extension cannot confidently categorize a URL, it asks the companion app. The companion uses the Apple `NaturalLanguage` framework to tokenize the page title, description, and content, scoring them against a weighted taxonomy.
 
-### 3. Core ML Predictor
+### 4. Core ML Predictor
 The companion builds a 9-feature `TrainingSample` from historical activity: day of week, hour, minute, weekend flag, minutes since last active, active events in the last 24 hours, active days in the last 7 days, tab count, and average dwell minutes. It trains a `MLBoostedTreeClassifier` and loads it through Core ML with `computeUnits = .all`.
 
 Core ML can use the Apple Neural Engine, GPU, or CPU depending on macOS scheduling and model support. Public APIs expose requested compute units and hardware availability, not the exact processor used for each individual inference, so the UI reports **NPU/GPU eligibility and CPU fallback state** rather than pretending to know the private scheduler's exact choice.
 
-### 4. Holiday-Aware Idle Windows
+### 5. Holiday-Aware Idle Windows
 The browser builds a per-day `holidayLevels` payload for the next seven calendar dates and sends it to the companion through Native Messaging. That means a Monday Japanese holiday changes Monday's prediction even if today is a normal workday. If the native host is offline, the browser fallback uses the same Japan / China calendar module and labels the result as a heuristic estimate.
 
-### 5. Memory Pressure Cleanup
+### 6. Memory Pressure Cleanup
 AI Cleanup ranks tabs by category priority, interaction count, and idle age. Lower-value, low-interaction, long-idle tabs are cleaned first. NSFW tabs are always the most aggressive cleanup target; AI and work tabs are protected by high category priority. In Test mode, the same logic tags tabs instead of closing them.
 
 ## Security And Privacy

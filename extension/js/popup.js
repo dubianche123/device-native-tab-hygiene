@@ -23,6 +23,11 @@ function formatAge(ms) {
   return `${days}d ${hrs % 24}h`;
 }
 
+function formatSignedAge(ms) {
+  if (!ms) return '0m';
+  return `${ms > 0 ? '+' : '-'}${formatAge(Math.abs(ms))}`;
+}
+
 function formatRelativeTime(timestampMs) {
   if (!timestampMs) return 'Not yet';
   const delta = Math.max(0, Date.now() - timestampMs);
@@ -325,6 +330,8 @@ document.querySelectorAll('.tabs__btn').forEach((btn) => {
     document.getElementById(`panel-${target}`).classList.remove('panel--hidden');
     // Hide settings when switching tabs
     document.getElementById('panel-settings').classList.add('panel--hidden');
+    // Refresh closure learning when predictions tab is opened
+    if (target === 'predictions') loadClosureLearning();
   });
 });
 
@@ -358,6 +365,7 @@ document.getElementById('btn-force-check').addEventListener('click', async () =>
       : `Checked ${response?.scannedCount ?? 0}, closed ${closed}`;
   await loadActiveTabs();
   await loadClosedLog();
+  await loadClosureLearning();
   await updateMemoryPressure();
   await updateCPUUsage();
   await updateAISuggestions();
@@ -611,6 +619,59 @@ async function loadPredictions() {
   container.innerHTML = cards + holidaySection;
 }
 
+// ── Closure Learning ─────────────────────────────────────────────────
+
+async function loadClosureLearning() {
+  const summary = await sendMessage({ type: 'getClosureLearning' });
+  const container = document.getElementById('closure-learning-content');
+  if (!container || !summary) return;
+
+  if (summary.totalSamples === 0) {
+    container.innerHTML = '<div class="empty-state">No closure data yet. Use the browser normally to build learning data.</div>';
+    return;
+  }
+
+  const catStats = summary.stats || {};
+  const rows = Object.entries(catStats)
+    .sort((a, b) => b[1].totalSamples - a[1].totalSamples)
+    .map(([cat, s]) => {
+      const catInfo = CATEGORIES[cat] || DEFAULT_CATEGORY;
+      const color = catInfo.color || '#95a5a6';
+      const label = catInfo.label || cat;
+      const hasRecommendation = s.recommendedThresholdMs != null;
+      const delta = s.thresholdDelta;
+      const deltaStr = delta != null
+        ? `<span class="cl-delta ${delta > 0 ? 'cl-delta--up' : 'cl-delta--down'}">${formatSignedAge(delta)}</span>`
+        : '';
+      const recStr = hasRecommendation
+        ? `→ ${formatAge(s.recommendedThresholdMs)}`
+        : `<span class="cl-need-more">need ${Math.max(0, 5 - (s.recommendationSampleCount || 0))} useful closes</span>`;
+
+      return `
+        <div class="cl-row">
+          <span class="cl-row__cat" style="color:${color}">${escapeHTML(label)}</span>
+          <span class="cl-row__stat" title="Manual closes (browser + popup)">${s.manualCount} manual</span>
+          <span class="cl-row__stat" title="Auto-cleanup closes">${s.autoCount} auto</span>
+          <span class="cl-row__stat" title="Median dwell time of manual closes">dwell ${formatAge(s.manualDwellMs)}</span>
+          <span class="cl-row__stat" title="Median idle age of manual closes">age ${formatAge(s.manualAgeMs)}</span>
+          <span class="cl-row__rec" title="Current default: ${formatAge(s.defaultThresholdMs)}">${recStr} ${deltaStr}</span>
+        </div>`;
+    }).join('');
+
+  container.innerHTML = `
+    <div class="cl-summary">
+      <span>${summary.totalSamples} samples</span>
+      <span>${summary.manualCount} manual</span>
+      <span>${summary.autoCount} auto</span>
+      <span>${summary.categoriesWithRecommendations}/${summary.categoriesTracked} categories adapted</span>
+    </div>
+    <div class="cl-legend">
+      <span class="cl-legend__item"><span class="cl-legend__swatch" style="background:var(--text-dim,#888)"></span> Manual close (full weight)</span>
+      <span class="cl-legend__item"><span class="cl-legend__swatch" style="background:var(--text-muted,#555)"></span> Auto cleanup (context only)</span>
+    </div>
+    <div class="cl-table">${rows}</div>`;
+}
+
 // ── Settings ─────────────────────────────────────────────────────────
 
 async function loadSettings() {
@@ -716,6 +777,20 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
   setTimeout(() => {
     btn.textContent = 'Save Settings';
     btn.style.background = '';
+  }, 1500);
+});
+
+document.getElementById('btn-reset-learning').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-reset-learning');
+  if (!confirm('Reset all closure learning data? This cannot be undone.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Resetting…';
+  await sendMessage({ type: 'resetClosureLearning' });
+  btn.textContent = '✓ Reset';
+  await loadClosureLearning();
+  setTimeout(() => {
+    btn.textContent = 'Reset Learning Data';
+    btn.disabled = false;
   }, 1500);
 });
 
@@ -884,6 +959,7 @@ document.getElementById('btn-ai-cleanup')?.addEventListener('click', async () =>
 
   await loadActiveTabs();
   await loadClosedLog();
+  await loadClosureLearning();
   await updateMemoryPressure();
   await updateCPUUsage();
   await updateAISuggestions();
@@ -939,6 +1015,7 @@ async function init() {
   await loadActiveTabs();
   await loadClosedLog();
   await loadPredictions();
+  await loadClosureLearning();
   await updateMemoryPressure();
   await updateCPUUsage();
   await updateAISuggestions();

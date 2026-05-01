@@ -240,11 +240,15 @@ export function categorizePage({ url, title = '', description = '', text = '' } 
 }
 
 /**
- * Get the effective max-age for a category, taking user overrides into account.
+ * Get the effective max-age for a category.
+ * Precedence: user custom thresholds > learned thresholds > default category.
  */
-export function getMaxAgeMs(categoryKey, customThresholds = {}) {
+export function getMaxAgeMs(categoryKey, customThresholds = {}, learnedThresholds = {}) {
   if (customThresholds[categoryKey]) {
     return customThresholds[categoryKey];
+  }
+  if (learnedThresholds[categoryKey]) {
+    return learnedThresholds[categoryKey];
   }
   const cat = CATEGORIES[categoryKey];
   return cat ? cat.maxAgeMs : DEFAULT_CATEGORY.maxAgeMs;
@@ -253,11 +257,12 @@ export function getMaxAgeMs(categoryKey, customThresholds = {}) {
 /**
  * Check whether a tab is "stale" — i.e. it has exceeded its category's
  * max idle time and should be closed.
+ * @param {object} [learnedThresholds] — { [category]: maxAgeMs } from closure learner
  */
-export function isTabStale(lastVisited, categoryKey, customThresholds = {}) {
+export function isTabStale(lastVisited, categoryKey, customThresholds = {}, learnedThresholds = {}) {
   const now = Date.now();
   const ageMs = now - lastVisited;
-  const maxAgeMs = getMaxAgeMs(categoryKey, customThresholds);
+  const maxAgeMs = getMaxAgeMs(categoryKey, customThresholds, learnedThresholds);
 
   return {
     stale: ageMs > maxAgeMs,

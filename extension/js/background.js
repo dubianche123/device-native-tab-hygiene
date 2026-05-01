@@ -28,6 +28,7 @@ import {
   getTaggedTabs, tagTab, untagTab, clearAllTags,
 } from './storage.js';
 import { categorizePage, isTabStale } from './categorizer.js';
+import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary, resetClosureLearning } from './closure-learner.js';
 import {
   classifyURL,
   connectToCompanion,
@@ -37,6 +38,8 @@ import {
   isInIdleWindow,
 } from './idle-detector.js';
 
+const programmaticCloseReasons = new Map();
+
 function isTrackableUrl(url) {
   return Boolean(url)
     && !url.startsWith('chrome://')
@@ -44,6 +47,39 @@ function isTrackableUrl(url) {
     && !url.startsWith('chrome-extension://')
     && !url.startsWith('about:')
     && !url.startsWith('file://');
+}
+
+function markProgrammaticClose(tabId, reason) {
+  programmaticCloseReasons.set(Number(tabId), reason);
+}
+
+function clearProgrammaticClose(tabId) {
+  programmaticCloseReasons.delete(Number(tabId));
+}
+
+function consumeProgrammaticClose(tabId) {
+  const numericTabId = Number(tabId);
+  const reason = programmaticCloseReasons.get(numericTabId) || null;
+  programmaticCloseReasons.delete(numericTabId);
+  return reason;
+}
+
+function closureAgeMs(entry, now = Date.now()) {
+  const reference = entry?.lastVisited || entry?.openedAt || now;
+  return Math.max(0, now - reference);
+}
+
+async function recordTabClosureForLearning(entry, type, now = Date.now()) {
+  if (!entry?.url) return;
+  await recordClosureSample({
+    type,
+    category: entry.category || 'other',
+    dwellMs: entry.dwellMs || 0,
+    ageMs: closureAgeMs(entry, now),
+    interactions: entry.interactions || 0,
+    openedAt: entry.openedAt || now,
+    lastVisited: entry.lastVisited || now,
+  });
 }
 
 function queryIdleState() {
@@ -242,9 +278,11 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
   }
 
   const now = Date.now();
+  markProgrammaticClose(numericTabId, 'manual_popup_close');
   try {
     await chrome.tabs.remove(numericTabId);
   } catch (err) {
+    clearProgrammaticClose(numericTabId);
     console.warn('[Neural-Janitor] Manual close failed:', err);
     return { ok: false, error: err?.message || 'Could not close tab' };
   }
@@ -264,6 +302,8 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
     dwellMs: entry.dwellMs || 0,
     interactions: entry.interactions || 0,
   });
+  await recordTabClosureForLearning(entry, 'manual_popup_close', now);
+
   await removeTabEntry(numericTabId);
 
   return { ok: true };
@@ -387,10 +427,19 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   }
 });
 
-// Tab removed → clean up registry
+// Tab removed → clean up registry & record real browser/manual closes.
+// Programmatic closes from the popup, stale check, or AI Cleanup also fire
+// this event, so those tab ids are marked before chrome.tabs.remove().
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const programmaticReason = consumeProgrammaticClose(tabId);
   const active = await getActiveSession();
   if (active?.tabId === tabId) await closeActiveSession('tab_removed');
+
+  const entry = await getTabEntry(tabId);
+  if (!programmaticReason) {
+    await recordTabClosureForLearning(entry, 'manual_browser_close');
+  }
+
   await removeTabEntry(tabId);
 });
 
@@ -447,6 +496,7 @@ async function performStaleCheck() {
   const currentlyIdle = await browserIsIdle();
   const closeWindowIsQuiet = predictedIdle || currentlyIdle;
   const testMode = settings.testMode === true;
+  const learnedThresholds = await getLearnedThresholds();
 
   // Clear previous tags at the start of each test-mode scan
   if (testMode) await clearAllTags();
@@ -459,7 +509,7 @@ async function performStaleCheck() {
     if (settings.whitelist.some(w => entry.url?.includes(w))) continue;
 
     const categoryKey = entry.category || 'other';
-    const result = isTabStale(entry.lastVisited, categoryKey, settings.customThresholds);
+    const result = isTabStale(entry.lastVisited, categoryKey, settings.customThresholds, learnedThresholds);
 
     if (!result.stale) continue;
     staleCount++;
@@ -500,9 +550,11 @@ async function performStaleCheck() {
     }
 
     // Deploy mode: actually close the tab
+    markProgrammaticClose(tabId, 'auto_cleanup');
     try {
       await chrome.tabs.remove(tabId);
     } catch {
+      clearProgrammaticClose(tabId);
       // Tab already closed — just log it
     }
     const sessionId = await findRecentlyClosedSession(entry.url);
@@ -521,6 +573,8 @@ async function performStaleCheck() {
       dwellMs: entry.dwellMs || 0,
       interactions: entry.interactions || 0,
     });
+
+    await recordTabClosureForLearning(entry, 'auto_cleanup', now);
 
     closedTabs.push({
       url: entry.url,
@@ -707,9 +761,13 @@ async function aiCleanup() {
       continue;
     }
 
+    markProgrammaticClose(tabId, 'auto_cleanup');
     try {
       await chrome.tabs.remove(tabId);
-    } catch { /* already closed */ }
+    } catch {
+      clearProgrammaticClose(tabId);
+      /* already closed */
+    }
 
     const categoryKey = entry.category || 'other';
     const sessionId = await findRecentlyClosedSession(entry.url);
@@ -726,6 +784,9 @@ async function aiCleanup() {
       dwellMs: entry.dwellMs || 0,
       interactions: entry.interactions || 0,
     });
+
+    await recordTabClosureForLearning(entry, 'auto_cleanup', now);
+
     await removeTabEntry(tabId);
 
     currentCount--;
@@ -1070,6 +1131,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+      case 'getClosureLearning':
+        sendResponse(await getLearningSummary());
+        break;
+      case 'getCategoryClosureStats':
+        sendResponse(await getCategoryClosureStats());
+        break;
+      case 'getLearnedThresholds':
+        sendResponse(await getLearnedThresholds());
+        break;
+      case 'resetClosureLearning':
+        await resetClosureLearning();
+        sendResponse({ ok: true });
+        break;
       default:
         sendResponse({ error: 'Unknown message type' });
     }

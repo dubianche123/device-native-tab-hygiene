@@ -606,6 +606,7 @@ export const STORAGE_KEYS = {
   RETURN_NOTIFICATION: 'returnNotification', // { pending: bool, closedTabs: [...] }
   COMPANION_STATUS: 'companionStatus', // { connected, lastSync, modelVersion }
   TAGGED_TABS: 'taggedTabs',           // { [tabId]: { reason, taggedAt, category } }
+  CLOSURE_LEARNING: 'closureLearning', // { samples: [{ type, category, dwellMs, ageMs, ... }] }
 };
 
 // Native messaging host name (must match the one registered in the companion app)

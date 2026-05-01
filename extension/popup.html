@@ -136,6 +136,10 @@
       <div id="predictions-content">
         <div class="empty-state">No predictions available. Start the companion app.</div>
       </div>
+      <div class="panel__header" style="margin-top:12px">🧠 Closure Learning</div>
+      <div id="closure-learning-content">
+        <div class="empty-state">No closure data yet. Use the browser normally to build learning data.</div>
+      </div>
     </div>
 
     <!-- Settings Panel (hidden by default) -->
@@ -191,6 +195,11 @@
           </label>
         </div>
         <button id="btn-save-settings" class="btn btn--primary">Save Settings</button>
+        <div class="setting-group" style="margin-top:12px">
+          <h3>Closure Learning</h3>
+          <p class="setting-hint">Neural-Janitor learns from how you close tabs to adjust category retention thresholds.</p>
+          <button id="btn-reset-learning" class="btn btn--sm btn--danger">Reset Learning Data</button>
+        </div>
       </div>
     </div>
   </div>

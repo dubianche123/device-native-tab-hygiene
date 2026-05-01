@@ -202,6 +202,34 @@ Popup refresh behavior: `Check`, `AI Clean`, mode changes, holiday-calendar chan
 
 Training samples: the popup displays real `trainingSamples` from the companion. It no longer fakes `99/100` while the model is awaiting enough valid/varied samples; raw browser events are shown separately as `0 valid (N events)` when applicable.
 
+## Closure Learning
+
+Learns from HOW the user closes tabs to dynamically adjust per-category retention thresholds. Three data streams:
+
+| Type | Source | Learning weight |
+|---|---|---|
+| `manual_browser_close` | Real browser close from `chrome.tabs.onRemoved` (Ctrl+W, close button) | 1.0 (full) |
+| `manual_popup_close` | Extension popup "Close & Log" button | 1.0 (full) |
+| `auto_cleanup` | `performStaleCheck()` or `aiCleanup()` | Context only; stored with weight 0.2 |
+
+**Storage**: `closureLearning` key in `chrome.storage.local`. Rolling window of up to 2000 samples.
+
+**Per-sample fields**: `type`, `category`, `dwellMs`, `ageMs`, `interactions`, `openedAt`, `lastVisited`, `closedAt`, `hourOfDay`.
+
+**Threshold recommendation algorithm**:
+1. Collect manual close dwell values per category.
+2. Ignore zero / near-zero dwell values below 1 minute for threshold recommendations, because those are usually background or bulk tab cleanup.
+3. Compute median meaningful `dwellMs` of manual closes per category.
+4. Recommended threshold = `median_dwell × 1.5`, clamped to `[5 min, 2× default]`.
+5. Requires ≥ 5 meaningful manual close samples before recommending.
+6. Precedence for `isTabStale()`: user custom thresholds > learned thresholds > default category `maxAgeMs`.
+
+**Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation.
+
+**Popup UI**: "Closure Learning" section in ML Insights tab shows per-category stats (manual/auto counts, median dwell/age, recommended threshold vs default, delta). Reset button in Settings.
+
+**Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `getLearnedThresholds`, `getCategoryClosureStats`, `getLearningSummary`, `resetClosureLearning`.
+
 ## Important Paths (new/changed)
 
 - Holiday module: `extension/js/holidays.js` (new)
@@ -210,16 +238,18 @@ Training samples: the popup displays real `trainingSamples` from the companion. 
 - Idle detector: `extension/js/idle-detector.js` (async `disconnectedStatus`, calendar-aware fallback)
 - Storage: `extension/js/storage.js` (new settings keys, tagged-tabs functions)
 - Background: `extension/js/background.js` (test mode, memory, AI cleanup, AI suggestions, force-trigger)
-- Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings)
+- Closure learner: `extension/js/closure-learner.js` (new — closure sampling, threshold recommendations)
+- Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings, closure learning UI)
 - Model transfer helpers: `scripts/export_model_bundle.sh`, `scripts/import_model_bundle.sh`
 
 ## Validation Commands (additions)
 
 ```bash
 node --check extension/js/holidays.js
+node --check extension/js/closure-learner.js
 ```
 
-All 7 JS files pass `node --check`. CSS braces balanced (139/139). Manifest JSON valid.
+All 8 JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 
 ## Current Operational Notes
 
@@ -233,3 +263,4 @@ All 7 JS files pass `node --check`. CSS braces balanced (139/139). Manifest JSON
 - DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.
 - URL paths are never matched against category keywords — this is intentional to prevent false positives.
 - Finalized (2026-05-01): IPC logic is synced for protocol version 2, including per-day `holidayLevels` for prediction requests. Hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is handled with clearly labeled browser heuristic estimates. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are implemented and syntax-verified.
+- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses meaningful manual median dwell time × 1.5 to recommend per-category retention thresholds. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Integrated into `isTabStale()` (learned thresholds between custom and defaults) and popup ML Insights panel.
