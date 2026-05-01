@@ -178,6 +178,44 @@ export async function markClosedRecordRestored(category, id, restoredAt = Date.n
   return true;
 }
 
+export async function removeClosedRecords(items = []) {
+  const log = await getClosedLog();
+  let removedCount = 0;
+
+  for (const item of items || []) {
+    const category = item.category || 'other';
+    const id = item.id;
+    if (!id || !Array.isArray(log[category])) continue;
+
+    const before = log[category].length;
+    log[category] = log[category].filter(entry => entry.id !== id);
+    removedCount += before - log[category].length;
+    if (log[category].length === 0) delete log[category];
+  }
+
+  await chrome.storage.local.set({ [STORAGE_KEYS.CLOSED_LOG]: log });
+  return { ok: true, removedCount };
+}
+
+export async function clearRestoredClosedRecords() {
+  const log = await getClosedLog();
+  let removedCount = 0;
+
+  for (const category of Object.keys(log)) {
+    const entries = Array.isArray(log[category]) ? log[category] : [];
+    const remaining = entries.filter(entry => !entry.restoredAt);
+    removedCount += entries.length - remaining.length;
+    if (remaining.length > 0) {
+      log[category] = remaining;
+    } else {
+      delete log[category];
+    }
+  }
+
+  await chrome.storage.local.set({ [STORAGE_KEYS.CLOSED_LOG]: log });
+  return { ok: true, removedCount };
+}
+
 // ── Idle Predictions (from ML companion) ──────────────────────────────
 
 export async function getIdlePredictions() {

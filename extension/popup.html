@@ -15,7 +15,7 @@
         <h1 class="header__title" title="Neural-Janitor (神经门卫) — The Chronos Engine">Neural-Janitor</h1>
       </div>
       <div class="header__actions">
-        <button id="btn-force-check" class="btn btn--action" title="Check stale tabs now">Check</button>
+        <button id="btn-force-check" class="btn btn--action" title="Preview stale tabs without closing them">Check</button>
         <button id="btn-ai-cleanup" class="btn btn--action btn--ai" title="AI Cleanup: close low-importance tabs to meet targets">🧹 AI Clean</button>
         <button id="btn-settings" class="btn btn--icon" title="Settings">⚙️</button>
       </div>
@@ -134,6 +134,8 @@
         <span id="closed-count">0</span> closed tabs
         <div class="closed-actions">
           <button id="btn-restore-selected" class="btn btn--sm" disabled>Restore selected</button>
+          <button id="btn-clear-selected" class="btn btn--sm" disabled>Clear selected</button>
+          <button id="btn-clear-restored" class="btn btn--sm" disabled>Clear restored</button>
           <button id="btn-export" class="btn btn--sm">Export JSON</button>
         </div>
       </div>

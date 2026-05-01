@@ -171,9 +171,11 @@ Important IPC detail: `extension/js/idle-detector.js` builds `holidayLevels` for
 
 Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
 
-- **Deploy mode**: `performStaleCheck()` and `aiCleanup()` call `chrome.tabs.remove()`.
+- **Deploy mode**: scheduled / idle-triggered `performStaleCheck()` and `aiCleanup()` call `chrome.tabs.remove()`.
 - **Test mode** (fresh-install default): Same logic, but calls `tagTab(tabId)` instead — tabs get red `🏷 TEST` badge in popup. Tagged tab IDs stored in `chrome.storage.local` under `nj:taggedTabs`.
+- **Manual Check**: popup `Check` sends `forceCheck`, which now calls `performStaleCheck({ dryRun: true, source: "manual_check" })`. It refreshes stale-tab tags and reports counts, but never closes tabs, even while Deploy is active. Use `AI Clean` or scheduled auto-cleanup for real closure.
 - Tags cleared at start of each scan (`clearAllTags()`), so each run shows fresh results.
+- Idle-context acceleration is only applied while `chrome.idle` reports `idle` or `locked`. A model can still show a high time-window prior while the user is active, but active state suppresses the cleanup multiplier and high-confidence early-close path.
 
 Setting: `testMode` (boolean, default `true` on fresh installs; existing installs keep their saved value).
 
@@ -184,6 +186,7 @@ Setting: `testMode` (boolean, default `true` on fresh installs; existing install
 Closed records are stored by category under `closedLog` in `chrome.storage.local`. The popup supports both single restore and checkbox-based batch restore:
 - Single restore sends `restoreClosedTab`.
 - Batch restore sends `restoreClosedTabs` with selected `{ category, id, url, sessionId }` entries.
+- Closed-log cleanup sends `removeClosedRecords` for selected records, or `clearRestoredClosedRecords` to remove restored entries.
 - Background restores sequentially via `chrome.sessions.restore(sessionId)` when possible, then falls back to `chrome.tabs.create({ url })`, and marks each successful record with `restoredAt`.
 
 ## Protected Tabs & Foreground/Background Lifecycle

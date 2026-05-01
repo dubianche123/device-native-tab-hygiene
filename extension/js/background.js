@@ -24,6 +24,7 @@ import {
   appendClosedRecord, getClosedLog, getSettings, updateSettings,
   getCompanionStatus,
   markClosedRecordRestored,
+  removeClosedRecords, clearRestoredClosedRecords,
   getReturnNotification, setReturnNotification, clearReturnNotification,
   getActiveSession, setActiveSession, clearActiveSession,
   getTaggedTabs, tagTab, untagTab, clearAllTags,
@@ -210,14 +211,21 @@ function idleContextMultiplier({ predictedIdle = false, currentlyIdle = false } 
 }
 
 async function buildCleanupContext(settings = {}) {
-  const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
   const currentlyIdle = await browserIsIdle();
+  const predictedIdleWindow = settings.useCompanion !== false ? await isInIdleWindow() : false;
+  const predictedIdle = currentlyIdle && predictedIdleWindow;
   const companionStatus = settings.useCompanion !== false ? await getCompanionStatus() : null;
   const rawConfidence = companionStatus?.currentIdleConfidence;
   const idleConfidence = typeof rawConfidence === 'number' && !Number.isNaN(rawConfidence)
     ? clamp(rawConfidence, 0, 1)
     : 0;
-  return { predictedIdle, currentlyIdle, idleConfidence };
+  return {
+    predictedIdle,
+    predictedIdleWindow,
+    currentlyIdle,
+    idleConfidence: currentlyIdle ? idleConfidence : 0,
+    rawIdleConfidence: idleConfidence,
+  };
 }
 
 function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(), context = {}) {
@@ -660,7 +668,7 @@ function setupAlarms() {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'nj-stale-check') {
     console.log('[Neural-Janitor] Periodic stale-tab check triggered');
-    await performStaleCheck();
+    await performStaleCheck({ source: 'alarm' });
 
     // Force-trigger AI cleanup if memory exceeds threshold
     const settings = await getSettings();
@@ -804,7 +812,7 @@ chrome.idle.onStateChanged.addListener(async (newState) => {
     await recordBrowserActivity(newState);
     // User went idle — good time to run a check
     console.log(`[Neural-Janitor] System state -> ${newState}, running stale check`);
-    await performStaleCheck();
+    await performStaleCheck({ source: `system_${newState}` });
   }
 });
 
@@ -812,9 +820,9 @@ chrome.idle.onStateChanged.addListener(async (newState) => {
 // CORE: STALE TAB CHECK
 // ══════════════════════════════════════════════════════════════════════
 
-async function performStaleCheck() {
+async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
   const settings = await getSettings();
-  if (!settings.enabled) return { ok: true, disabled: true, scannedCount: 0, closedCount: 0 };
+  if (!settings.enabled && !dryRun) return { ok: true, disabled: true, scannedCount: 0, closedCount: 0 };
 
   const registry = await getTabRegistry();
   const now = Date.now();
@@ -826,8 +834,8 @@ async function performStaleCheck() {
   const learnedThresholds = await getLearnedThresholds();
   const protectedTabs = await getProtectedTabIds();
 
-  // Clear previous tags at the start of each test-mode scan
-  if (testMode) await clearAllTags();
+  // Manual checks and test mode are previews: refresh the visible tags.
+  if (testMode || dryRun) await clearAllTags();
 
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
@@ -860,8 +868,8 @@ async function performStaleCheck() {
     if (!result.stale) continue;
     staleCount++;
 
-    if (testMode) {
-      // Test mode: tag the tab instead of closing it
+    if (testMode || dryRun) {
+      // Test mode and manual Check tag the tab instead of closing it.
       await tagTab(tabId, {
         reason: closureReasonForRecord(result, result.backgroundAgeMs),
         category: categoryKey,
@@ -878,7 +886,7 @@ async function performStaleCheck() {
       continue;
     }
 
-    // Deploy mode: actually close the tab
+    // Deploy mode automatic scan: actually close the tab
     markProgrammaticClose(tabId, 'auto_cleanup');
     try {
       await chrome.tabs.remove(tabId);
@@ -931,11 +939,15 @@ async function performStaleCheck() {
   return {
     ok: true,
     disabled: false,
+    dryRun,
+    source,
     testMode,
+    action: (dryRun || testMode) ? 'tagged' : 'closed',
     scannedCount: Object.keys(registry).length,
     staleCount,
-    closedCount: testMode ? 0 : closedTabs.length,
-    taggedCount: testMode ? taggedTabs.length : 0,
+    wouldCloseCount: staleCount,
+    closedCount: (dryRun || testMode) ? 0 : closedTabs.length,
+    taggedCount: (dryRun || testMode) ? taggedTabs.length : 0,
     idleContextMultiplier: idleContextMultiplier(retentionContext),
     idleConfidence: retentionContext.idleConfidence,
   };
@@ -1282,14 +1294,20 @@ async function getAISuggestion() {
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
     if (protectedTabs.has(tabId)) continue;
-    const result = tabRetentionProfile(entry, settings, learnedThresholds, now, retentionContext);
+    if (settings.whitelist.some(w => entry.url?.includes(w))) continue;
+    const blacklistMatch = matchBlacklist(entry.url, settings.blacklist);
+    const result = blacklistMatch
+      ? {
+        stale: closureAgeMs(entry, now) > blacklistThresholdMs(blacklistMatch),
+      }
+      : tabRetentionProfile(entry, settings, learnedThresholds, now, retentionContext);
     if (result.stale) staleCount++;
   }
   if (staleCount > 0) {
     suggestions.push({
       level: 'info',
       icon: '🧹',
-      text: `${staleCount} stale tab(s) detected. Run "Check" or AI Cleanup to clear them.`,
+      text: `${staleCount} stale tab(s) detected. Run Check to review them, or AI Clean to close low-importance tabs.`,
       action: 'forceCheck',
     });
   }
@@ -1407,7 +1425,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await getClosedLog());
         break;
       case 'forceCheck':
-        sendResponse(await performStaleCheck());
+        sendResponse(await performStaleCheck({ dryRun: true, source: 'manual_check' }));
         break;
       case 'getSettings':
         sendResponse(await getSettings());
@@ -1481,6 +1499,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       case 'restoreClosedTabs':
         sendResponse(await restoreClosedTabs(msg.items || []));
+        break;
+      case 'removeClosedRecords':
+        sendResponse(await removeClosedRecords(msg.items || []));
+        break;
+      case 'clearRestoredClosedRecords':
+        sendResponse(await clearRestoredClosedRecords());
         break;
       case 'closeTrackedTab':
         sendResponse(await closeTrackedTab(msg.tabId, msg.reason));

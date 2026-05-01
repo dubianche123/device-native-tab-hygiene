@@ -381,16 +381,19 @@ function activityHeadlineText(status = {}) {
 
 function idleLikelihoodText(status = {}, confidence = 0) {
   const formatted = formatPercent(confidence);
+  const currentState = String(status.currentActivityState || '').toLowerCase();
+  const activeSuffix = currentState === 'active' ? ' (active now)' : '';
+  const metric = currentState === 'active' ? 'idle prior' : 'idle likelihood';
   if (status.runtime === 'coreml') {
-    return `${acceleratorLabel(status)} idle likelihood: ${formatted}`;
+    return `${acceleratorLabel(status)} ${metric}: ${formatted}${activeSuffix}`;
   }
   if (status.runtime === 'lookup') {
-    return `Learning idle likelihood: ${formatted}`;
+    return `Learning ${metric}: ${formatted}${activeSuffix}`;
   }
   if (status.runtime === 'disabled') {
     return 'ML off: no idle estimate';
   }
-  return `Fallback idle estimate: ${formatted}`;
+  return `Fallback ${metric}: ${formatted}${activeSuffix}`;
 }
 
 function retrainRuntimeLabel(status = {}) {
@@ -545,7 +548,9 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   decision.textContent = activityHeadlineText(status);
   if (decisionSubline) {
     decisionSubline.textContent = idleLikelihoodText(status, confidence);
-    decisionSubline.title = status.readinessReason || '';
+    decisionSubline.title = String(status.currentActivityState || '').toLowerCase() === 'active'
+      ? 'This is the model prior for the current time window; active browser state prevents current-idle early-close behavior.'
+      : (status.readinessReason || '');
   }
   decision.title = status.readinessReason || '';
   renderConfidenceCurve(status.confidenceCurve || []);
@@ -599,14 +604,14 @@ document.getElementById('btn-force-check').addEventListener('click', async () =>
   btn.disabled = true;
   btn.textContent = 'Checking';
   const response = await sendMessage({ type: 'forceCheck' });
-  const closed = response?.closedCount || 0;
   const tagged = response?.taggedCount || 0;
-  btn.textContent = closed > 0 ? `Closed ${closed}` : 'Checked';
+  const stale = response?.staleCount || response?.wouldCloseCount || tagged || 0;
+  btn.textContent = stale > 0 ? `Found ${stale}` : 'Checked';
   statusText.textContent = response?.disabled
     ? 'Auto-cleanup is disabled'
     : tagged > 0
-      ? `Checked ${response?.scannedCount ?? 0}, tagged ${tagged}`
-      : `Checked ${response?.scannedCount ?? 0}, closed ${closed}`;
+      ? `Checked ${response?.scannedCount ?? 0}, flagged ${tagged}; no tabs closed`
+      : `Checked ${response?.scannedCount ?? 0}; no tabs closed`;
   await loadActiveTabs();
   await loadClosedLog();
   await loadClosureLearning();
@@ -708,6 +713,7 @@ function closedSelectionKey(category, id) {
 
 function updateClosedRestoreControls() {
   const btn = document.getElementById('btn-restore-selected');
+  const clearSelected = document.getElementById('btn-clear-selected');
   const selectAll = document.getElementById('closed-select-all');
   const checkboxes = [...document.querySelectorAll('.closed-select')];
   const selectedVisible = checkboxes.filter(input => input.checked).length;
@@ -718,6 +724,13 @@ function updateClosedRestoreControls() {
     btn.textContent = closedSelection.size > 0
       ? `Restore selected (${closedSelection.size})`
       : 'Restore selected';
+  }
+
+  if (clearSelected) {
+    clearSelected.disabled = closedSelection.size === 0;
+    clearSelected.textContent = closedSelection.size > 0
+      ? `Clear selected (${closedSelection.size})`
+      : 'Clear selected';
   }
 
   if (selectAll) {
@@ -782,6 +795,10 @@ async function loadClosedLog() {
     : allEntries.filter(e => e.category === currentFilter);
 
   document.getElementById('closed-count').textContent = allEntries.length;
+  const clearRestored = document.getElementById('btn-clear-restored');
+  if (clearRestored) {
+    clearRestored.disabled = !allEntries.some(entry => entry.restoredAt);
+  }
 
   const list = document.getElementById('closed-tab-list');
   if (filtered.length === 0) {
@@ -883,6 +900,36 @@ document.getElementById('btn-restore-selected').addEventListener('click', async 
   btn.textContent = response?.failedCount
     ? `Restored ${response.restoredCount}, failed ${response.failedCount}`
     : `Restored ${response?.restoredCount || 0}`;
+  await loadClosedLog();
+});
+
+document.getElementById('btn-clear-selected').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-clear-selected');
+  const items = await selectedClosedItemsFromLog();
+  if (items.length === 0) {
+    closedSelection.clear();
+    updateClosedRestoreControls();
+    return;
+  }
+
+  if (!confirm(`Clear ${items.length} selected closed-log record(s)?`)) return;
+
+  btn.disabled = true;
+  btn.textContent = `Clearing ${items.length}`;
+  const response = await sendMessage({ type: 'removeClosedRecords', items });
+  if (response?.ok) closedSelection.clear();
+  btn.textContent = `Cleared ${response?.removedCount || 0}`;
+  await loadClosedLog();
+});
+
+document.getElementById('btn-clear-restored').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-clear-restored');
+  if (!confirm('Clear restored closed-log records?')) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Clearing';
+  const response = await sendMessage({ type: 'clearRestoredClosedRecords' });
+  btn.textContent = `Cleared ${response?.removedCount || 0}`;
   await loadClosedLog();
 });
 
@@ -1541,7 +1588,7 @@ async function updateAISuggestions() {
   container.innerHTML = data.suggestions.map(s => {
     const cls = levelClass[s.level] || 'ai-suggestion--info';
     const btn = s.action
-      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : s.action === 'forceCheck' ? '🔍 Check' : s.action === 'setModeDeploy' ? '🚀 Deploy' : s.action === 'setModeTest' ? '🧪 Test' : 'Open'}</button>`
+      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : s.action === 'forceCheck' ? '🔍 Review' : s.action === 'setModeDeploy' ? '🚀 Deploy' : s.action === 'setModeTest' ? '🧪 Test' : 'Open'}</button>`
       : '';
     const ignore = s.level !== 'ok' || s.action
       ? '<button class="btn btn--xs ai-suggestion__ignore" title="Hide AI Suggestions for 10 minutes">Ignore</button>'

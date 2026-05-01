@@ -106,7 +106,7 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 
 ## Current Feature Set
 
-- **Test / Deploy modes**: Test mode tags tabs that would be closed; Deploy mode actually closes them and writes to the closed-tab log.
+- **Test / Deploy modes**: Test mode tags tabs that would be closed; Deploy mode lets scheduled cleanup and AI Clean close tabs and write to the closed-tab log.
 - **Safe default**: Fresh installs start in Test mode, and the popup suggests when the learning data is mature enough to switch to Deploy.
 - **Category-aware retention**: AI, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and `Other` each have their own close-time cap.
 - **Manual closure learning**: Real browser closes and popup closes become local training samples.
@@ -250,7 +250,7 @@ Reload the browser extension after importing so the companion reloads the model.
 
 ## Using The Popup
 
-- **Check**: Runs a stale-tab check immediately.
+- **Check**: Reviews stale tabs immediately and tags them without closing anything.
 - **AI Clean**: Uses tab count, memory pressure, importance, and whitelist rules to decide what to clean.
 - **AI Suggestions**: Shows when Deploy mode is ready, or when it is safer to stay in Test a little longer.
 - **MEM / CPU**: Shows current memory pressure, CPU usage, and compact CPU model / thread count.
