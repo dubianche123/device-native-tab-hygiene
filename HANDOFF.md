@@ -173,6 +173,13 @@ Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
 
 Setting: `testMode` (boolean, default `false`).
 
+## Closed Log Restore
+
+Closed records are stored by category under `closedLog` in `chrome.storage.local`. The popup supports both single restore and checkbox-based batch restore:
+- Single restore sends `restoreClosedTab`.
+- Batch restore sends `restoreClosedTabs` with selected `{ category, id, url, sessionId }` entries.
+- Background restores sequentially via `chrome.sessions.restore(sessionId)` when possible, then falls back to `chrome.tabs.create({ url })`, and marks each successful record with `restoredAt`.
+
 ## Protected Tabs & Foreground/Background Lifecycle
 
 **Protected tabs** (`getProtectedTabIds()` in background.js): Before any auto-close scan, the system queries Chrome for tabs that must never be closed:

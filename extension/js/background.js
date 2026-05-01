@@ -353,6 +353,25 @@ async function restoreClosedTab({ category, id, url, sessionId }) {
   return { ok: Boolean(restored), restored };
 }
 
+async function restoreClosedTabs(items = []) {
+  const results = [];
+  for (const item of items) {
+    const result = await restoreClosedTab(item);
+    results.push({
+      category: item.category || null,
+      id: item.id || null,
+      ok: Boolean(result.ok),
+    });
+  }
+
+  return {
+    ok: results.some(result => result.ok),
+    restoredCount: results.filter(result => result.ok).length,
+    failedCount: results.filter(result => !result.ok).length,
+    results,
+  };
+}
+
 async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
   const numericTabId = Number.parseInt(tabId, 10);
   if (!Number.isInteger(numericTabId)) {
@@ -1234,6 +1253,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'restoreClosedTab':
         sendResponse(await restoreClosedTab(msg));
+        break;
+      case 'restoreClosedTabs':
+        sendResponse(await restoreClosedTabs(msg.items || []));
         break;
       case 'closeTrackedTab':
         sendResponse(await closeTrackedTab(msg.tabId, msg.reason));

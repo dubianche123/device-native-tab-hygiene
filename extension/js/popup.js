@@ -652,6 +652,53 @@ async function loadActiveTabs() {
 // ── Closed Log ───────────────────────────────────────────────────────
 
 let currentFilter = 'all';
+const closedSelection = new Set();
+
+function closedSelectionKey(category, id) {
+  return `${category || 'other'}::${id}`;
+}
+
+function updateClosedRestoreControls() {
+  const btn = document.getElementById('btn-restore-selected');
+  const selectAll = document.getElementById('closed-select-all');
+  const checkboxes = [...document.querySelectorAll('.closed-select')];
+  const selectedVisible = checkboxes.filter(input => input.checked).length;
+  const restorableVisible = checkboxes.length;
+
+  if (btn) {
+    btn.disabled = closedSelection.size === 0;
+    btn.textContent = closedSelection.size > 0
+      ? `Restore selected (${closedSelection.size})`
+      : 'Restore selected';
+  }
+
+  if (selectAll) {
+    selectAll.disabled = restorableVisible === 0;
+    selectAll.checked = restorableVisible > 0 && selectedVisible === restorableVisible;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < restorableVisible;
+  }
+}
+
+async function selectedClosedItemsFromLog() {
+  const closedLog = await sendMessage({ type: 'getClosedLog' }) || {};
+  const selected = [];
+
+  for (const [category, entries] of Object.entries(closedLog)) {
+    for (const entry of entries || []) {
+      if (entry.restoredAt) continue;
+      const key = closedSelectionKey(category, entry.id);
+      if (!closedSelection.has(key)) continue;
+      selected.push({
+        category,
+        id: entry.id,
+        url: entry.url,
+        sessionId: entry.sessionId || null,
+      });
+    }
+  }
+
+  return selected;
+}
 
 async function loadClosedLog() {
   const closedLog = await sendMessage({ type: 'getClosedLog' }) || {};
@@ -691,6 +738,7 @@ async function loadClosedLog() {
   const list = document.getElementById('closed-tab-list');
   if (filtered.length === 0) {
     list.innerHTML = '<div class="empty-state">No closed tabs yet</div>';
+    updateClosedRestoreControls();
     return;
   }
 
@@ -699,9 +747,14 @@ async function loadClosedLog() {
     const closedDate = new Date(entry.closedAt).toLocaleDateString();
     const favicon = faviconURL(entry);
     const restored = Boolean(entry.restoredAt);
+    const selectionKey = closedSelectionKey(entry.category, entry.id);
+    if (restored) closedSelection.delete(selectionKey);
 
     return `
       <div class="tab-item">
+        ${restored
+          ? '<span class="tab-item__select-placeholder"></span>'
+          : `<input class="closed-select" type="checkbox" data-key="${escapeHTML(selectionKey)}" data-cat="${escapeHTML(entry.category)}" data-id="${escapeHTML(entry.id)}" data-url="${escapeHTML(entry.url)}" data-session-id="${escapeHTML(entry.sessionId || '')}" ${closedSelection.has(selectionKey) ? 'checked' : ''} aria-label="Select closed tab for restore">`}
         ${favicon
           ? `<img class="tab-item__favicon" src="${escapeHTML(favicon)}" onerror="this.outerHTML='<div class=\\'tab-item__favicon tab-item__favicon--fallback\\'>🌐</div>'">`
           : '<div class="tab-item__favicon tab-item__favicon--fallback">🌐</div>'}
@@ -720,6 +773,17 @@ async function loadClosedLog() {
       </div>`;
   }).join('');
 
+  list.querySelectorAll('.closed-select').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.checked) {
+        closedSelection.add(input.dataset.key);
+      } else {
+        closedSelection.delete(input.dataset.key);
+      }
+      updateClosedRestoreControls();
+    });
+  });
+
   list.querySelectorAll('.btn-restore').forEach(btn => {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
@@ -732,10 +796,47 @@ async function loadClosedLog() {
         sessionId: btn.dataset.sessionId || null,
       });
       btn.textContent = response?.ok ? 'Restored' : 'Failed';
+      closedSelection.delete(closedSelectionKey(btn.dataset.cat, btn.dataset.id));
       await loadClosedLog();
     });
   });
+
+  updateClosedRestoreControls();
 }
+
+document.getElementById('closed-select-all').addEventListener('change', (event) => {
+  const checked = event.target.checked;
+  document.querySelectorAll('.closed-select').forEach(input => {
+    input.checked = checked;
+    if (checked) {
+      closedSelection.add(input.dataset.key);
+    } else {
+      closedSelection.delete(input.dataset.key);
+    }
+  });
+  updateClosedRestoreControls();
+});
+
+document.getElementById('btn-restore-selected').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-restore-selected');
+  const items = await selectedClosedItemsFromLog();
+  if (items.length === 0) {
+    closedSelection.clear();
+    updateClosedRestoreControls();
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = `Restoring ${items.length}`;
+  const response = await sendMessage({ type: 'restoreClosedTabs', items });
+  for (const result of response?.results || []) {
+    if (result.ok) closedSelection.delete(closedSelectionKey(result.category, result.id));
+  }
+  btn.textContent = response?.failedCount
+    ? `Restored ${response.restoredCount}, failed ${response.failedCount}`
+    : `Restored ${response?.restoredCount || 0}`;
+  await loadClosedLog();
+});
 
 // ── Export ───────────────────────────────────────────────────────────
 

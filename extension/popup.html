@@ -131,9 +131,16 @@
     <div class="panel panel--hidden" id="panel-closed">
       <div class="panel__header">
         <span id="closed-count">0</span> closed tabs
-        <button id="btn-export" class="btn btn--sm">Export JSON</button>
+        <div class="closed-actions">
+          <button id="btn-restore-selected" class="btn btn--sm" disabled>Restore selected</button>
+          <button id="btn-export" class="btn btn--sm">Export JSON</button>
+        </div>
       </div>
       <div class="category-filters" id="category-filters"></div>
+      <label class="closed-select-all" id="closed-select-all-row">
+        <input type="checkbox" id="closed-select-all">
+        <span>Select visible restorable tabs</span>
+      </label>
       <div class="tab-list" id="closed-tab-list">
         <div class="empty-state">No closed tabs yet</div>
       </div>

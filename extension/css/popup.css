@@ -660,6 +660,27 @@ body {
   align-items: center;
 }
 
+.closed-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.closed-select-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.closed-select-all input,
+.closed-select {
+  accent-color: var(--accent);
+}
+
 /* ── Tab List ───────────────────────────────────────────────────── */
 
 .tab-list {
@@ -683,6 +704,13 @@ body {
 
 .tab-item:hover {
   background: var(--bg-hover);
+}
+
+.tab-item__select-placeholder,
+.closed-select {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .tab-item--tagged {

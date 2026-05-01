@@ -123,7 +123,7 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 - **MEM / CPU 监控**：Popup 会显示内存压力、CPU 占用，以及类似 `M3 8T` 的简短芯片 / 线程数标记。
 - **AI Suggestions**：插件会给出减少标签页、运行 AI Cleanup、执行检查等建议，每条建议都可以忽略 10 分钟。点击 Check、AI Clean、切换模式、切换节假日日历、保存设置，以及 Popup 保持打开时，建议都会刷新。
 - **透明 ML 控制台**：Popup 会显示 Native Messaging 连接状态、Model Samples、Closure Samples、Model Readiness、模型准确率、最后本地训练时间、硬件遥测标记、决策置信度 / 启发式估算，以及低功耗推理指示灯。
-- **关闭标签页恢复**：由 Neural-Janitor 关闭的标签页会按类别记录，并可从 Closed Log 恢复。
+- **关闭标签页恢复**：由 Neural-Janitor 关闭的标签页会按类别记录，并可从 Closed Log 单个恢复或勾选多个后批量恢复。
 
 ## 分类关闭时间规则
 

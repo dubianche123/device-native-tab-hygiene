@@ -123,7 +123,7 @@ Neural-Janitor uses a narrower but smarter model role. It builds a `MLBoostedTre
 - **Memory and CPU monitor**: The popup shows memory pressure, CPU usage, and a compact CPU model / thread label such as `M3 8T`.
 - **AI Suggestions**: The popup recommends actions such as reducing tab count or running AI Cleanup, and each recommendation can be ignored for 10 minutes. Suggestions refresh when you run Check, run AI Clean, change modes, change the holiday calendar, save settings, and periodically while the popup is open.
 - **Transparent ML console**: The popup shows Native Messaging link state, Model Samples, Closure Samples, Model Readiness, model accuracy when available, last local retrain time, hardware telemetry markers, decision confidence / heuristic estimates, and a low-power inference indicator.
-- **Closed-tab recovery**: Tabs closed by Neural-Janitor are logged by category and can be restored from the Closed Log.
+- **Closed-tab recovery**: Tabs closed by Neural-Janitor are logged by category and can be restored from the Closed Log, either one-by-one or by selecting multiple entries and restoring them together.
 
 ## Category Closure Time Rules
 
