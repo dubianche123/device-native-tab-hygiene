@@ -161,12 +161,13 @@ function categoryFromDomainMemory(memoryHit) {
   };
 }
 
-function shouldUseRootDomainThreshold(entry) {
-  const confidence = Number(entry?.categoryConfidence || 0);
-  const source = entry?.categorySource || '';
-  return (entry?.category || 'other') === 'other'
-    || source === 'domain-memory'
-    || confidence < 0.7;
+function learnedDomainThresholdFor(entry, learnedThresholds = {}) {
+  const rootDomain = entry?.rootDomain || getRootDomain(entry?.url || '');
+  if (!allowsRootDomainLearning(rootDomain)) return null;
+  const domainThreshold = learnedThresholds?.__domains?.[rootDomain];
+  return typeof domainThreshold === 'number' && domainThreshold > 0
+    ? domainThreshold
+    : null;
 }
 
 async function upgradeWithDomainMemory(url, cat) {
@@ -238,8 +239,7 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
   const contextMultiplier = idleContextMultiplier(context);
   const closureLimit = settings.customThresholds?.[categoryKey];
   const hasClosureLimit = typeof closureLimit === 'number' && closureLimit > 0;
-  const domainLearningAllowed = shouldUseRootDomainThreshold(entry) && allowsRootDomainLearning(rootDomain);
-  const domainLearnedThreshold = domainLearningAllowed ? learnedThresholds?.__domains?.[rootDomain] : null;
+  const domainLearnedThreshold = learnedDomainThresholdFor(entry, learnedThresholds);
   const hasDomainThreshold = typeof domainLearnedThreshold === 'number' && domainLearnedThreshold > 0;
   const learnedThreshold = hasDomainThreshold ? domainLearnedThreshold : learnedThresholds?.[categoryKey];
   const hasLearnedThreshold = typeof learnedThreshold === 'number' && learnedThreshold > 0;
@@ -294,14 +294,22 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
 function deployReadiness(summary = {}) {
   const manualCount = Number(summary.manualCount || 0);
   const learnedCategoryCount = Number(summary.categoriesWithRecommendations || 0);
+  const learnedDomainCount = Number(summary.domainsWithRecommendations || 0);
   const trackedCategoryCount = Number(summary.categoriesTracked || 0);
-  const ready = manualCount >= DEPLOY_MIN_MANUAL_CLOSES && learnedCategoryCount >= DEPLOY_MIN_LEARNED_CATEGORIES;
+  const trackedDomainCount = Number(summary.domainsTracked || 0);
+  const learnedBucketCount = learnedCategoryCount + learnedDomainCount;
+  const trackedBucketCount = trackedCategoryCount + trackedDomainCount;
+  const ready = manualCount >= DEPLOY_MIN_MANUAL_CLOSES && learnedBucketCount >= DEPLOY_MIN_LEARNED_CATEGORIES;
   const safer = manualCount >= DEPLOY_SAFE_MANUAL_CLOSES
-    && learnedCategoryCount >= Math.min(DEPLOY_SAFE_LEARNED_CATEGORIES, Math.max(1, trackedCategoryCount));
+    && learnedBucketCount >= Math.min(DEPLOY_SAFE_LEARNED_CATEGORIES, Math.max(1, trackedBucketCount));
   return {
     manualCount,
     learnedCategoryCount,
+    learnedDomainCount,
+    learnedBucketCount,
     trackedCategoryCount,
+    trackedDomainCount,
+    trackedBucketCount,
     ready,
     safer,
   };
@@ -833,11 +841,13 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
   let staleCount = 0;
   const retentionContext = await buildCleanupContext(settings);
   const testMode = settings.testMode === true;
+  const activeGuard = !dryRun && !testMode && retentionContext.currentlyIdle !== true;
   const learnedThresholds = await getLearnedThresholds();
   const protectedTabs = await getProtectedTabIds();
 
-  // Manual checks and test mode are previews: refresh the visible tags.
-  if (testMode || dryRun) await clearAllTags();
+  // Manual checks, Test mode, and active Deploy scans are previews.
+  // Real automatic stale closure waits for chrome.idle to report idle/locked.
+  if (testMode || dryRun || activeGuard) await clearAllTags();
 
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
@@ -870,8 +880,8 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
     if (!result.stale) continue;
     staleCount++;
 
-    if (testMode || dryRun) {
-      // Test mode and manual Check tag the tab instead of closing it.
+    if (testMode || dryRun || activeGuard) {
+      // Preview paths tag the tab instead of closing it.
       await tagTab(tabId, {
         reason: closureReasonForRecord(result, result.backgroundAgeMs),
         category: categoryKey,
@@ -888,7 +898,7 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
       continue;
     }
 
-    // Deploy mode automatic scan: actually close the tab
+    // Deploy mode automatic scan: actually close the tab after idle approval.
     markProgrammaticClose(tabId, 'auto_cleanup');
     try {
       await chrome.tabs.remove(tabId);
@@ -944,12 +954,14 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
     dryRun,
     source,
     testMode,
-    action: (dryRun || testMode) ? 'tagged' : 'closed',
+    activeGuard,
+    action: (dryRun || testMode || activeGuard) ? (activeGuard ? 'tagged_active_guard' : 'tagged') : 'closed',
     scannedCount: Object.keys(registry).length,
     staleCount,
     wouldCloseCount: staleCount,
-    closedCount: (dryRun || testMode) ? 0 : closedTabs.length,
-    taggedCount: (dryRun || testMode) ? taggedTabs.length : 0,
+    closedCount: (dryRun || testMode || activeGuard) ? 0 : closedTabs.length,
+    taggedCount: (dryRun || testMode || activeGuard) ? taggedTabs.length : 0,
+    currentlyIdle: retentionContext.currentlyIdle,
     idleContextMultiplier: idleContextMultiplier(retentionContext),
     idleConfidence: retentionContext.idleConfidence,
   };
@@ -1227,13 +1239,13 @@ async function getAISuggestion() {
       suggestions.push({
         level: 'warning',
         icon: '🧪',
-        text: `Stay in Test for now. You have ${readiness.manualCount} manual closes and ${readiness.learnedCategoryCount}/${readiness.trackedCategoryCount || 0} learned categories. Try Deploy after ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned categories; ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is safer.`,
+        text: `Stay in Test for now. You have ${readiness.manualCount} manual closes and ${readiness.learnedBucketCount}/${readiness.trackedBucketCount || 0} learned close-time buckets. Try Deploy after ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned buckets; ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is safer.`,
       });
     } else {
       suggestions.push({
         level: 'ok',
         icon: '🚀',
-        text: `Deploy looks ready. You have ${readiness.manualCount} manual closes and ${readiness.learnedCategoryCount}/${readiness.trackedCategoryCount || 0} learned categories. ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is the safer bar.`,
+        text: `Deploy looks ready. You have ${readiness.manualCount} manual closes and ${readiness.learnedBucketCount}/${readiness.trackedBucketCount || 0} learned close-time buckets. ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is the safer bar.`,
         action: 'setModeDeploy',
       });
     }
@@ -1241,7 +1253,7 @@ async function getAISuggestion() {
     suggestions.push({
       level: 'warning',
       icon: '🧯',
-      text: `Deploy is active before the model is ready. Consider switching back to Test until you reach ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned categories.`,
+      text: `Deploy is active before close-time learning is ready. Consider switching back to Test until you reach ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned buckets.`,
       action: 'setModeTest',
     });
   }
@@ -1306,10 +1318,13 @@ async function getAISuggestion() {
     if (result.stale) staleCount++;
   }
   if (staleCount > 0) {
+    const staleText = (!settings.testMode && retentionContext.currentlyIdle !== true)
+      ? `${staleCount} stale tab(s) detected. Check can review them; automatic stale closure waits until the Mac is idle.`
+      : `${staleCount} stale tab(s) detected. Run Check to review them, or AI Clean to close low-importance tabs.`;
     suggestions.push({
       level: 'info',
       icon: '🧹',
-      text: `${staleCount} stale tab(s) detected. Run Check to review them, or AI Clean to close low-importance tabs.`,
+      text: staleText,
       action: 'forceCheck',
     });
   }

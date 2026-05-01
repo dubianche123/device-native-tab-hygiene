@@ -171,16 +171,16 @@ Important IPC detail: `extension/js/idle-detector.js` builds `holidayLevels` for
 
 Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
 
-- **Deploy mode**: scheduled / idle-triggered `performStaleCheck()` and `aiCleanup()` call `chrome.tabs.remove()`.
+- **Deploy mode**: idle-triggered `performStaleCheck()` and `aiCleanup()` can call `chrome.tabs.remove()`. Scheduled stale scans in Deploy mode require `chrome.idle` to report `idle` or `locked`; while the Mac is active, they only refresh stale tags.
 - **Test mode** (fresh-install default): Same logic, but calls `tagTab(tabId)` instead — tabs get red `🏷 TEST` badge in popup. Tagged tab IDs stored in `chrome.storage.local` under `nj:taggedTabs`.
 - **Manual Check**: popup `Check` sends `forceCheck`, which now calls `performStaleCheck({ dryRun: true, source: "manual_check" })`. It refreshes stale-tab tags and reports counts, but never closes tabs, even while Deploy is active. Use `AI Clean` or scheduled auto-cleanup for real closure.
 - Tags cleared at start of each scan (`clearAllTags()`), so each run shows fresh results.
-- Idle-context acceleration is only applied while `chrome.idle` reports `idle` or `locked`. A model can still show a high time-window prior while the user is active, but active state suppresses the cleanup multiplier and high-confidence early-close path.
+- Idle-context acceleration and automatic stale closure are only applied while `chrome.idle` reports `idle` or `locked`. A model can still show a high time-window prior while the user is active, but active state suppresses the cleanup multiplier, high-confidence early-close path, and scheduled stale closure.
 - `Reset Model State` is available both in the popup and via `scripts/reset_model_state.sh`. It clears closure learning, root-domain memory, idle predictions, and companion-side artifacts. The shell script writes a reset request so the live native host clears its in-memory store on the next message.
 
 Setting: `testMode` (boolean, default `true` on fresh installs; existing installs keep their saved value).
 
-**Deploy readiness suggestion**: The popup's AI Suggestions panel now tells the user when Deploy is reasonable. Current heuristic: keep Test until there are at least 5 manual close samples and at least 2 categories with learned close-time recommendations; 10 manual closes and 3 learned categories is the safer bar.
+**Deploy readiness suggestion**: The popup's AI Suggestions panel now tells the user when Deploy is reasonable. Current heuristic: keep Test until there are at least 5 manual close samples and at least 2 learned close-time buckets (category or root domain); 10 manual closes and 3 learned buckets is the safer bar.
 
 ## Closed Log Restore
 
@@ -205,17 +205,17 @@ Both `performStaleCheck()` and `aiCleanup()` skip all protected tab IDs. This pr
 - `closeActiveSession()`: sets `lastBackgroundedAt = now` on the tab entry.
 - `checkpointActiveSession()`: preserves `lastForegroundAt`.
 
-**Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions compare the background clock (`now - lastBackgroundedAt`) against an effective close-after time. For learned categories, that time is:
+**Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions compare the background clock (`now - lastBackgroundedAt`) against an effective close-after time. For learned domain/category buckets, that time is:
 
 ```
 modelClosureTime = learnedManualThreshold × importanceMultiplier × idleContextMultiplier
 effectiveClosureTime = min(modelClosureTime, userClosureTimeLimit)
 importanceMultiplier = 0.75 + normalizedFocusRatio × 1.0
 normalizedFocusRatio = clamp(foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs), 0, 1)
-idleContextMultiplier = 0.75 if chrome.idle is idle/locked, 0.9 inside predicted idle window, otherwise 1.15
+idleContextMultiplier = 0.75 if chrome.idle is idle/locked, otherwise 1.15
 ```
 
-The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an auxiliary context weight, not the primary model and not a hard gate. The model-calculated closure time is capped to `[1 min, 2× category default]`, then the user's Settings slider caps it as the final closure time limit. The slider is not a model replacement; it is the upper bound users can reason about.
+The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an auxiliary context weight for timing, but also the approval gate for scheduled stale closure in Deploy mode. The model-calculated closure time is capped to `[1 min, 2× category default]`, then the user's Settings slider caps it as the final closure time limit. The slider is not a model replacement; it is the upper bound users can reason about.
 
 **Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, idle-context multiplier, and close reason for stale checks / AI Cleanup. When the Mac is actually idle and the tab is within one day of its learned close time, the tab can be marked for an early close rather than waiting for the exact threshold.
 
@@ -276,9 +276,10 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 2. Ignore zero / near-zero values below 15 seconds — those indicate immediate close or misclick, not meaningful retention data.
 3. Compute median meaningful `backgroundAgeMs` of manual closes per bucket.
 4. Recommended learned close time = `median_background_age × 1.5`, clamped to category floor and `2× default`.
-5. Requires ≥ 3 meaningful manual close samples before recommending.
-6. Fallback: if there are not enough meaningful `backgroundAgeMs` samples yet, use meaningful `dwellMs` (foreground dwell) as proxy for active-close patterns.
-7. Runtime close time: for `Other`, `domain-memory`, or low-confidence categories on learning-eligible roots, prefer root-domain learned close time when present, then category learned close time, then category default. Final formula is `min(learned close time × foreground/background importance multiplier × idle-context multiplier, user maximum close-after slider)`. If no learned time exists yet, the category default is capped by the user slider.
+5. Root-domain buckets require ≥ 3 meaningful manual close samples before recommending; entertainment domains require ≥ 5.
+6. Category buckets require broader evidence: ≥ 6 meaningful manual samples across ≥ 2 root domains; entertainment categories require ≥ 8. The broad `Other` category does not produce a category-level recommendation — use root-domain learning instead.
+7. Fallback: if there are not enough meaningful `backgroundAgeMs` samples yet, use meaningful `dwellMs` (foreground dwell) as proxy for active-close patterns.
+8. Runtime close time: on learning-eligible roots, prefer root-domain learned close time whenever present, then category learned close time, then category default. Final formula is `min(learned close time × foreground/background importance multiplier × idle-context multiplier, user maximum close-after slider)`. If no learned time exists yet, the category default is capped by the user slider.
 
 **Learned close-time floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive. Uncategorized `other` floors at 12 hours because unknown pages should be conservative until classification improves.
 
@@ -334,5 +335,5 @@ All 8 JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 - Updated (2026-05-01): DOMAIN_MAP expanded — `finviz.com` → finance, `oracle.com`/`microsoft.com` → work, `open.mimo.xiaomi.com` → work, `deepl.com`/`lingq.com`/`tutorialsdojo.com`/`eikaiwa.dmm.com`/`learn.microsoft.com`/`skillbuilder.aws` → reference. Reference category keywords updated to include certification/exam/translation terms.
 - Added (2026-05-01): CPU usage monitoring — `chrome.system.cpu` permission, `getCPUUsage()` in background.js with snapshot-delta calculation, CPU bar in popup header alongside MEM bar.
 - Fixed (2026-05-01): Holiday prediction badges now show the actual holiday name (e.g. `🎌 みどりの日`) instead of generic "Holiday" text. `getHolidayName()` is called per prediction day and the name is rendered in the badge and tooltip.
-- Added (2026-05-02): Root-domain fallback learning — closure samples now store `rootDomain`; runtime retention uses domain learned thresholds for `Other` / low-confidence classifications before category thresholds; Close-Time Learning UI shows top domain buckets. This prevents broad `Other` pages from sharing one close-time model without letting root buckets override confident known categories.
+- Added (2026-05-02): Root-domain close-time learning now has priority over broad category thresholds for every learning-eligible root domain, not just `Other` / low-confidence pages. Category-level recommendations require broader manual evidence, and the broad `Other` category no longer emits a shared close-time recommendation.
 - Added (2026-05-02): Domain category memory — high-confidence non-`other` classifications are remembered by root domain and reused for later low-confidence pages. Added stronger multilingual signals for finance articles (`金融危机`, `日元贬值`, `円安`), language learning (`godic.net`, `eudic.net`, `duolingo`), coding interview (`nowcoder.com`), Microsoft Rewards, IBKR, and anime/manga sites.

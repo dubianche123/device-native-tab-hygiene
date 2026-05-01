@@ -23,7 +23,9 @@ import { CATEGORIES, DEFAULT_CATEGORY, STORAGE_KEYS } from './constants.js';
 import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
 
 const MAX_SAMPLES = 2000;
-const MIN_MANUAL_SAMPLES = 3;      // Fast provisional learning from a few repeated manual closes
+const MIN_DOMAIN_MANUAL_SAMPLES = 3; // Fast domain-level learning from repeated manual closes
+const MIN_CATEGORY_MANUAL_SAMPLES = 6; // Category learning needs broader evidence
+const MIN_CATEGORY_MANUAL_DOMAINS = 2;
 const MIN_ANY_SAMPLES = 3;         // Minimum total samples to show any stats
 const MIN_USEFUL_SAMPLE_MS = 15 * 1000; // Ignore immediate misclicks/background bulk closes
 const AUTO_CLEANUP_WEIGHT = 0.2;   // Dampened feedback weight
@@ -76,9 +78,14 @@ function learnedThresholdFloor(category) {
   return IMPORTANT_CATEGORIES.has(category) ? IMPORTANT_SESSION_FLOOR_MS : SHORT_SESSION_FLOOR_MS;
 }
 
-function requiredManualSamples(category) {
+function requiredManualSamples(category, scope = 'domain') {
+  if (scope === 'category') {
+    if (category === DEFAULT_CATEGORY.key) return Number.POSITIVE_INFINITY;
+    if (category === 'entertainment') return 8;
+    return MIN_CATEGORY_MANUAL_SAMPLES;
+  }
   if (category === 'entertainment') return 5;
-  return MIN_MANUAL_SAMPLES;
+  return MIN_DOMAIN_MANUAL_SAMPLES;
 }
 
 // ── Record a closure sample ───────────────────────────────────────────
@@ -127,11 +134,13 @@ export async function recordClosureSample(sample) {
   return sample;
 }
 
-function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key) {
+function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key, options = {}) {
+  const scope = options.scope || 'category';
   const catInfo = CATEGORIES[defaultCategory] || DEFAULT_CATEGORY;
   const defaultThreshold = catInfo.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
   const manualCount = b.manualDwell.length;
   const autoCount = b.autoDwell.length;
+  const manualDomainCount = b.manualDomains?.size || 0;
 
   const manualDwellMs = median(b.manualDwell);
   const manualBackgroundAgeMs = median(b.manualBackgroundAge);
@@ -142,20 +151,35 @@ function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key) 
   const recommendationDwellSamples = b.manualDwell.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
   const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
   const thresholdFloor = learnedThresholdFloor(defaultCategory);
-  const sampleRequirement = requiredManualSamples(defaultCategory);
+  const sampleRequirement = requiredManualSamples(defaultCategory, scope);
+  const domainRequirement = scope === 'category' ? MIN_CATEGORY_MANUAL_DOMAINS : 1;
 
   let recommendedThresholdMs = null;
   let thresholdDelta = null;
   const recommendationSampleCount = Math.max(validBackgroundSamples.length, recommendationDwellSamples.length);
+  const hasEnoughSamples = Number.isFinite(sampleRequirement)
+    && recommendationSampleCount >= sampleRequirement;
+  const hasEnoughDomains = scope !== 'category'
+    || manualDomainCount >= domainRequirement
+    || (manualDomainCount === 0 && recommendationSampleCount >= sampleRequirement * 2);
+  let recommendationBlockedReason = null;
 
-  if (validBackgroundSamples.length >= sampleRequirement) {
+  if (!Number.isFinite(sampleRequirement)) {
+    recommendationBlockedReason = 'category_too_broad';
+  } else if (!hasEnoughSamples) {
+    recommendationBlockedReason = 'needs_more_manual_samples';
+  } else if (!hasEnoughDomains) {
+    recommendationBlockedReason = 'needs_more_domains';
+  }
+
+  if (!recommendationBlockedReason && validBackgroundSamples.length >= sampleRequirement) {
     const medianBackgroundAge = median(validBackgroundSamples);
     recommendedThresholdMs = Math.max(
       thresholdFloor,
       Math.min(defaultThreshold * 2, medianBackgroundAge * 1.5),
     );
     thresholdDelta = recommendedThresholdMs - defaultThreshold;
-  } else if (recommendationDwellSamples.length >= sampleRequirement) {
+  } else if (!recommendationBlockedReason && recommendationDwellSamples.length >= sampleRequirement) {
     const recommendationDwellMs = median(recommendationDwellSamples);
     recommendedThresholdMs = Math.max(
       thresholdFloor,
@@ -180,7 +204,12 @@ function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key) 
     autoBackgroundAgeMs,
     manualCount,
     autoCount,
+    manualDomainCount,
     recommendationSampleCount,
+    recommendationSampleRequirement: Number.isFinite(sampleRequirement) ? sampleRequirement : null,
+    recommendationDomainRequirement: domainRequirement,
+    recommendationScope: scope,
+    recommendationBlockedReason,
     totalSamples: manualCount + autoCount,
     peakClosureHour: peakHour != null ? Number(peakHour) : null,
     recommendedThresholdMs,
@@ -214,9 +243,11 @@ export async function getCategoryClosureStats() {
         autoDwell: [],
         autoBackgroundAge: [],
         hourDist: [],
+        manualDomains: new Set(),
       };
     }
     const b = buckets[cat];
+    const rootDomain = s.rootDomain || getRootDomain(s.url || '');
 
     if (isManualClosure(s.type)) {
       b.manualDwell.push(s.dwellMs);
@@ -225,6 +256,7 @@ export async function getCategoryClosureStats() {
       const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
       b.manualBackgroundAge.push(backgroundAge);
       b.manualInteractions.push(s.interactions);
+      if (rootDomain) b.manualDomains.add(rootDomain);
     } else {
       b.autoDwell.push(s.dwellMs);
       const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
@@ -235,7 +267,7 @@ export async function getCategoryClosureStats() {
 
   const stats = {};
   for (const [cat, b] of Object.entries(buckets)) {
-    stats[cat] = summariseClosureBucket(cat, b, cat);
+    stats[cat] = summariseClosureBucket(cat, b, cat, { scope: 'category' });
   }
 
   return stats;
@@ -271,6 +303,7 @@ export async function getDomainClosureStats() {
         autoBackgroundAge: [],
         hourDist: [],
         categoryCounts: {},
+        manualDomains: new Set(),
       };
     }
     const b = buckets[rootDomain];
@@ -282,6 +315,7 @@ export async function getDomainClosureStats() {
       const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
       b.manualBackgroundAge.push(backgroundAge);
       b.manualInteractions.push(s.interactions);
+      b.manualDomains.add(rootDomain);
     } else {
       b.autoDwell.push(s.dwellMs);
       const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
@@ -294,7 +328,7 @@ export async function getDomainClosureStats() {
   for (const [rootDomain, b] of Object.entries(buckets)) {
     const cat = dominantCategory(b.categoryCounts);
     stats[rootDomain] = {
-      ...summariseClosureBucket(rootDomain, b, cat),
+      ...summariseClosureBucket(rootDomain, b, cat, { scope: 'domain' }),
       rootDomain,
       categoryCounts: b.categoryCounts,
     };
@@ -304,7 +338,7 @@ export async function getDomainClosureStats() {
 }
 
 /**
- * Get learned thresholds for all categories with enough manual data.
+ * Get learned thresholds for categories and root domains with enough manual data.
  * Returns { [category]: recommendedThresholdMs, __domains: { [rootDomain]: recommendedThresholdMs } }
  */
 export async function getLearnedThresholds() {
@@ -346,6 +380,7 @@ export async function getLearningSummary() {
     .filter(s => s.recommendedThresholdMs != null).length;
   const domainsWithRecommendations = Object.values(domainStats)
     .filter(s => s.recommendedThresholdMs != null).length;
+  const learnedBuckets = categoriesWithRecommendations + domainsWithRecommendations;
 
   return {
     totalSamples,
@@ -355,6 +390,8 @@ export async function getLearningSummary() {
     categoriesWithRecommendations,
     domainsTracked: Object.keys(domainStats).length,
     domainsWithRecommendations,
+    learnedBuckets,
+    trackedBuckets: Object.keys(stats).length + Object.keys(domainStats).length,
     stats,
     domainStats,
   };

@@ -20,6 +20,8 @@ const IMPORTANCE_MULTIPLIER_MAX = 1.75;
 const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AI_SUGGESTION_MUTE_MS = 10 * 60 * 1000;
+const CLOSE_READINESS_TARGET_MANUAL = 10;
+const CLOSE_READINESS_TARGET_BUCKETS = 3;
 
 function formatAge(ms) {
   ms = Math.max(0, ms || 0);
@@ -141,21 +143,19 @@ function importanceMultiplierFor(entry, backgroundAgeMs) {
     + normalizedImportance * (IMPORTANCE_MULTIPLIER_MAX - IMPORTANCE_MULTIPLIER_MIN);
 }
 
-function shouldUseRootDomainThreshold(entry) {
-  const confidence = Number(entry?.categoryConfidence || 0);
-  const source = entry?.categorySource || '';
-  return (entry?.category || 'other') === 'other'
-    || source === 'domain-memory'
-    || confidence < 0.7;
+function learnedDomainThresholdFor(entry, learnedThresholds = {}) {
+  const rootDomain = entry?.rootDomain || getRootDomain(entry?.url || '');
+  if (!allowsRootDomainLearning(rootDomain)) return null;
+  const domainThreshold = learnedThresholds.__domains?.[rootDomain];
+  return typeof domainThreshold === 'number' && domainThreshold > 0
+    ? domainThreshold
+    : null;
 }
 
 function modelMaxAgeFor(entry, backgroundAgeMs, learnedThresholds = {}) {
   const categoryKey = entry.category || 'other';
   const cat = CATEGORIES[categoryKey] || DEFAULT_CATEGORY;
-  const rootDomain = entry.rootDomain || getRootDomain(entry.url || '');
-  const domainThreshold = shouldUseRootDomainThreshold(entry) && allowsRootDomainLearning(rootDomain)
-    ? learnedThresholds.__domains?.[rootDomain]
-    : null;
+  const domainThreshold = learnedDomainThresholdFor(entry, learnedThresholds);
   const learnedThreshold = typeof domainThreshold === 'number' && domainThreshold > 0
     ? domainThreshold
     : learnedThresholds[categoryKey];
@@ -198,10 +198,7 @@ function categoryClosureTiming(categoryKey, registry = {}, learnedThresholds = {
   const hasCategoryLearned = typeof learnedThreshold === 'number' && learnedThreshold > 0;
   const hasDomainLearned = Object.values(registry).some(entry => {
     if ((entry.category || 'other') !== categoryKey) return false;
-    const rootDomain = entry.rootDomain || getRootDomain(entry.url || '');
-    const domainThreshold = shouldUseRootDomainThreshold(entry) && allowsRootDomainLearning(rootDomain)
-      ? learnedThresholds.__domains?.[rootDomain]
-      : null;
+    const domainThreshold = learnedDomainThresholdFor(entry, learnedThresholds);
     return typeof domainThreshold === 'number' && domainThreshold > 0;
   });
   const hasLearned = hasCategoryLearned || hasDomainLearned;
@@ -487,12 +484,13 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   const learnedCategoryCount = closureLearning.categoriesWithRecommendations
     || status.closureLearning?.categoriesWithRecommendations
     || 0;
-  const trackedCategoryCount = closureLearning.categoriesTracked
-    || status.closureLearning?.categoriesTracked
+  const learnedDomainCount = closureLearning.domainsWithRecommendations
+    || status.closureLearning?.domainsWithRecommendations
     || 0;
-  const closeReadiness = trackedCategoryCount > 0
-    ? learnedCategoryCount / trackedCategoryCount
-    : Math.min(1, manualClosureSamples / 3);
+  const learnedBucketCount = learnedCategoryCount + learnedDomainCount;
+  const manualReadiness = Math.min(1, manualClosureSamples / CLOSE_READINESS_TARGET_MANUAL);
+  const bucketReadiness = Math.min(1, learnedBucketCount / CLOSE_READINESS_TARGET_BUCKETS);
+  const closeReadiness = Math.min(manualReadiness, bucketReadiness);
 
   link.textContent = status.connected ? 'Connected' : 'Disconnected';
   link.style.color = status.connected ? 'var(--success)' : 'var(--danger)';
@@ -519,11 +517,9 @@ function renderMLConsole(status = {}, closureLearning = {}) {
 
   const normalizedMaturity = Math.max(0, Math.min(1, closeReadiness));
   const maturityPercent = Math.round(normalizedMaturity * 100);
-  const readinessLabel = trackedCategoryCount > 0
-    ? `${learnedCategoryCount}/${trackedCategoryCount} categories`
-    : `${Math.min(manualClosureSamples, 3)}/3 manual`;
+  const readinessLabel = `${Math.min(manualClosureSamples, CLOSE_READINESS_TARGET_MANUAL)}/${CLOSE_READINESS_TARGET_MANUAL} manual · ${Math.min(learnedBucketCount, CLOSE_READINESS_TARGET_BUCKETS)}/${CLOSE_READINESS_TARGET_BUCKETS} buckets`;
   progress.style.width = `${normalizedMaturity > 0 ? Math.max(1, maturityPercent) : 0}%`;
-  progress.parentElement.title = 'Close-time readiness: categories with enough manual close samples to recommend a learned close time.';
+  progress.parentElement.title = 'Close-time readiness: enough manual closes plus enough learned domain/category buckets for safer Deploy mode.';
   if (progressValue) {
     progressValue.textContent = readinessLabel;
     progressValue.title = progress.parentElement.title;
@@ -1068,6 +1064,19 @@ async function loadPredictions() {
 
 // ── Close-Time Learning ───────────────────────────────────────────────
 
+function learningNeedLabel(stat = {}, scope = 'category') {
+  if (stat.recommendationBlockedReason === 'category_too_broad') {
+    return '<span class="cl-need-more">Use domain learning</span>';
+  }
+  if (stat.recommendationBlockedReason === 'needs_more_domains') {
+    const need = Math.max(0, (stat.recommendationDomainRequirement || 2) - (stat.manualDomainCount || 0));
+    return `<span class="cl-need-more">Need ${need} more domain${need === 1 ? '' : 's'}</span>`;
+  }
+  const requirement = stat.recommendationSampleRequirement || (scope === 'domain' ? 3 : 6);
+  const need = Math.max(0, requirement - (stat.recommendationSampleCount || 0));
+  return `<span class="cl-need-more">Need ${need} manual</span>`;
+}
+
 async function loadClosureLearning() {
   const summary = await sendMessage({ type: 'getClosureLearning' });
   const container = document.getElementById('closure-learning-content');
@@ -1092,7 +1101,7 @@ async function loadClosureLearning() {
         : '';
       const recStr = hasRecommendation
         ? `Learned ${formatAge(s.recommendedThresholdMs)}`
-        : `<span class="cl-need-more">Need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} manual</span>`;
+        : learningNeedLabel(s, 'category');
 
       return `
         <div class="cl-card">
@@ -1118,7 +1127,7 @@ async function loadClosureLearning() {
       const hasRecommendation = s.recommendedThresholdMs != null;
       const recStr = hasRecommendation
         ? `Learned ${formatAge(s.recommendedThresholdMs)}`
-        : `<span class="cl-need-more">Need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} manual</span>`;
+        : learningNeedLabel(s, 'domain');
       return `
         <div class="cl-card cl-card--domain">
           <div class="cl-card__header">

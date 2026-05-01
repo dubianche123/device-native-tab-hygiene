@@ -99,14 +99,14 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 
 | Problem | Traditional Tab Closers | Neural-Janitor |
 |:--|:--|:--|
-| **When to close?** | Static timer such as 3 or 7 days. | Learned close time × tab importance × idle context multiplier. |
+| **When to close?** | Static timer such as 3 or 7 days. | Learned close time × tab importance, with real idle approval for automatic stale closure. |
 | **Categorization** | Simple domain matching. | Domain map + page signals + local NLP fallback. |
 | **Resource Cost** | Constant background polling. | Event-driven worker + local Core ML inference. |
 | **Privacy** | Often cloud-backed. | 100% local. No telemetry leaves the device. |
 
 ## Current Feature Set
 
-- **Test / Deploy modes**: Test mode tags tabs that would be closed; Deploy mode lets scheduled cleanup and AI Clean close tabs and write to the closed-tab log.
+- **Test / Deploy modes**: Test mode tags tabs that would be closed. Deploy mode lets idle-approved scheduled cleanup and AI Clean close tabs and write to the closed-tab log.
 - **Safe default**: Fresh installs start in Test mode, and the popup suggests when the learning data is mature enough to switch to Deploy.
 - **Category-aware retention**: AI, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and `Other` each have their own close-time cap.
 - **Manual closure learning**: Real browser closes and popup closes become local training samples.
@@ -118,7 +118,7 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 
 ## Category Closure Time Rules
 
-Tabs are assigned a close time from four inputs: category defaults, learned manual-close behavior, root-domain fallback history, and per-tab importance. The Settings sliders are caps, not replacements; the model can close sooner, but it cannot keep a tab longer than the configured maximum.
+Tabs are assigned a close time from four inputs: category defaults, learned manual-close behavior, root-domain history, and per-tab importance. Root-domain history wins over broad category history whenever it exists, so one fast-closing site does not teach the whole category to close early. The Settings sliders are caps, not replacements; the model can close sooner, but it cannot keep a tab longer than the configured maximum.
 
 | Category | Max Idle Time | Rationale |
 |----------|--------------|-----------|
@@ -142,7 +142,7 @@ The tracker records when a tab enters foreground, leaves foreground, how long it
 
 ### 2. Manual Closure Learner
 
-Manual closes are the primary signal. The learner stores category, root domain, foreground dwell, background age, and interactions, then recommends close times from meaningful manual samples. Automatic cleanup samples are kept as context only so the system does not train on its own decisions.
+Manual closes are the primary signal. The learner stores category, root domain, foreground dwell, background age, and interactions, then recommends close times from meaningful manual samples. Domain-level patterns adapt first; category-level patterns require broader evidence across multiple domains. Automatic cleanup samples are kept as context only so the system does not train on its own decisions.
 
 ### 3. Local Page Classifier
 
@@ -150,7 +150,7 @@ The browser classifies pages with a domain map and content signals first. When c
 
 ### 4. Auxiliary Idle Predictor
 
-The companion trains a 9-feature `TrainingSample` model from local activity history. That model is deliberately auxiliary: it influences idle-context multipliers and the ML console, while close-time learning remains the main decision source.
+The companion trains a 9-feature `TrainingSample` model from local activity history. That model is deliberately auxiliary: it influences idle-context multipliers and the ML console, while close-time learning remains the main decision source. Automatic stale closure waits for Chrome's real `idle` / `locked` state; a high model prior alone is not permission to close tabs while you are active.
 
 ### 5. Holiday-Aware Idle Windows
 
