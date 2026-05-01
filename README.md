@@ -20,35 +20,60 @@ Its architectural principle is simple:
 
 Underneath the browser extension, the system records lightweight behavioral signals. The macOS Swift companion app translates these into training data, and Core ML runs local predictions through Apple's runtime scheduler to identify the optimal moments for workspace hygiene.
 
-## Runtime Dataflow
+## Runtime Dataflow (C4 Container View)
 
-```text
-┌─────────────────────────────────────────────────────────┐
-│  Chrome / Edge Extension (Manifest V3)                  │
-│                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────────────┐ │
-│  │ Tab      │  │ Category │  │ Stale Tab Checker     │ │
-│  │ Tracker  │→ │ Engine   │→ │ (alarm every 30 min)  │ │
-│  └──────────┘  └──────────┘  └───────────────────────┘ │
-│       ↕                                    ↓            │
-│  ┌──────────────────────┐    ┌───────────────────────┐ │
-│  │ Native Messaging     │    │ Closed Tab Log        │ │
-│  │ Client               │    │ (by category, local)  │ │
-│  └──────────┬───────────┘    └───────────────────────┘ │
-└─────────────┼───────────────────────────────────────────┘
-              │ Native Messaging (stdio)
-              ↓
-┌─────────────────────────────────────────────────────────┐
-│  macOS Companion App (Swift)                            │
-│                                                         │
-│  ┌──────────────────────┐  ┌─────────────────────────┐ │
-│  │ Activity Collector   │→ │ Core ML Predictor       │ │
-│  │ (idle + tab signals) │  │ (Core ML Auto)          │ │
-│  └──────────────────────┘  └─────────────────────────┘ │
-│                                    ↓                    │
-│                           Idle window predictions       │
-│                           sent back to extension        │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  user(["Person<br/>Browser user"])
+
+  subgraph browser["Container: Chrome / Edge Extension (Manifest V3)"]
+    popup["Popup UI<br/>Modes, settings, ML console"]
+    tracker["Tab Tracker<br/>Focus, dwell time, interactions"]
+    category["Category Engine<br/>Domain map + local signals"]
+    hygiene["Hygiene Orchestrator<br/>Check, AI Clean, test tags"]
+    ipc["Native Messaging Client<br/>Protocol v2 JSON"]
+    closedLog[("Closed Tab Log<br/>Restore records")]
+    settings[("Local Settings<br/>Thresholds, calendar, whitelist")]
+  end
+
+  subgraph native["Container: macOS Swift Companion"]
+    collector["Activity Collector<br/>Idle state + tab context"]
+    classifier["Local Page Classifier<br/>NaturalLanguage scoring"]
+    predictor["The Chronos Engine<br/>9-feature Core ML predictor"]
+    artifacts[("Application Support<br/>Events, lookup, model metrics")]
+  end
+
+  coreml[["Apple Core ML Runtime<br/>ANE / GPU / CPU scheduler"]]
+  chrome[["Chrome / Edge APIs<br/>tabs, idle, sessions, system"]]
+
+  user -->|"Opens popup / changes settings"| popup
+  chrome -->|"Tab, idle, session, MEM/CPU signals"| tracker
+  popup -->|"Manual Check / AI Clean"| hygiene
+  tracker --> category --> hygiene
+  settings --> hygiene
+  hygiene -->|"Close, tag, restore"| chrome
+  hygiene --> closedLog
+  tracker -->|"Activity samples"| ipc
+  category -->|"Ambiguous page metadata"| ipc
+  ipc <-->|"Native Messaging stdio"| collector
+  ipc <-->|"Predictions, health, classification"| predictor
+  collector --> artifacts
+  artifacts --> predictor
+  classifier --> predictor
+  predictor --> coreml
+  coreml -->|"Idle confidence curve"| predictor
+
+  classDef person fill:#f9f2d7,stroke:#b59b3b,color:#2f2611,stroke-width:1px
+  classDef browser fill:#e9f7ff,stroke:#2684b8,color:#102a3a,stroke-width:1.5px
+  classDef native fill:#ecfdf3,stroke:#2f9d66,color:#123522,stroke-width:1.5px
+  classDef data fill:#fff7ed,stroke:#d97706,color:#3a2206,stroke-width:1px
+  classDef external fill:#f3f4f6,stroke:#6b7280,color:#1f2937,stroke-width:1px
+
+  class user person
+  class popup,tracker,category,hygiene,ipc browser
+  class collector,classifier,predictor native
+  class closedLog,settings,artifacts data
+  class coreml,chrome external
 ```
 
 This diagram separates the two execution contexts:
