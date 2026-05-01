@@ -22,6 +22,7 @@ import {
 import {
   getTabCount, getTabEntry, getTabRegistry, setTabRegistry, upsertTabEntry, updateTabEntry, removeTabEntry,
   appendClosedRecord, getClosedLog, getSettings, updateSettings,
+  getCompanionStatus,
   markClosedRecordRestored,
   getReturnNotification, setReturnNotification, clearReturnNotification,
   getActiveSession, setActiveSession, clearActiveSession,
@@ -42,6 +43,8 @@ const programmaticCloseReasons = new Map();
 const IMPORTANCE_MULTIPLIER_MIN = 0.75;
 const IMPORTANCE_MULTIPLIER_MAX = 1.75;
 const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HIGH_IDLE_CONFIDENCE = 0.92;
 
 function isTrackableUrl(url) {
   return Boolean(url)
@@ -160,6 +163,17 @@ function idleContextMultiplier({ predictedIdle = false, currentlyIdle = false } 
   return 1.15;
 }
 
+async function buildCleanupContext(settings = {}) {
+  const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
+  const currentlyIdle = await browserIsIdle();
+  const companionStatus = settings.useCompanion !== false ? await getCompanionStatus() : null;
+  const rawConfidence = companionStatus?.currentIdleConfidence;
+  const idleConfidence = typeof rawConfidence === 'number' && !Number.isNaN(rawConfidence)
+    ? clamp(rawConfidence, 0, 1)
+    : 0;
+  return { predictedIdle, currentlyIdle, idleConfidence };
+}
+
 function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(), context = {}) {
   const categoryKey = entry.category || 'other';
   const backgroundAgeMs = closureAgeMs(entry, now);
@@ -189,6 +203,16 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
     thresholdSource = hasLearnedThreshold ? 'learned_x_importance_x_context_capped' : 'default_capped';
   }
 
+  const remainingMs = Math.max(0, maxAgeMs - backgroundAgeMs);
+  const highIdleConfidence = (context.currentlyIdle === true)
+    && (context.idleConfidence ?? 0) >= HIGH_IDLE_CONFIDENCE
+    && maxAgeMs >= DAY_MS
+    && remainingMs <= DAY_MS;
+  const stale = backgroundAgeMs > maxAgeMs || highIdleConfidence;
+  const reason = highIdleConfidence
+    ? 'high_idle_confidence_early_close'
+    : (backgroundAgeMs > maxAgeMs ? 'exceeded_background_threshold' : 'within_threshold');
+
   return {
     ...importance,
     categoryKey,
@@ -197,10 +221,22 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
     modelMaxAgeMs,
     limitMs,
     maxAgeMs,
+    earlyCloseEligible: highIdleConfidence,
     thresholdSource,
-    stale: backgroundAgeMs > maxAgeMs,
-    reason: backgroundAgeMs > maxAgeMs ? 'exceeded_background_threshold' : 'within_threshold',
+    stale,
+    reason,
   };
+}
+
+function closureReasonForRecord(result, backgroundAgeMs) {
+  const hours = Math.round(backgroundAgeMs / (1000 * 60 * 60));
+  if (result.reason === 'blacklist') {
+    return `blacklist_${hours}h`;
+  }
+  if (result.reason === 'high_idle_confidence_early_close') {
+    return `confidence_idle_${hours}h`;
+  }
+  return `idle_${hours}h`;
 }
 
 // ── Protected Tabs ───────────────────────────────────────────────────
@@ -704,9 +740,7 @@ async function performStaleCheck() {
   const closedTabs = [];
   const taggedTabs = [];
   let staleCount = 0;
-  const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
-  const currentlyIdle = await browserIsIdle();
-  const retentionContext = { predictedIdle, currentlyIdle };
+  const retentionContext = await buildCleanupContext(settings);
   const testMode = settings.testMode === true;
   const learnedThresholds = await getLearnedThresholds();
   const protectedTabs = await getProtectedTabIds();
@@ -748,9 +782,7 @@ async function performStaleCheck() {
     if (testMode) {
       // Test mode: tag the tab instead of closing it
       await tagTab(tabId, {
-        reason: result.reason === 'blacklist'
-          ? `blacklist_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`
-          : `stale_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
+        reason: closureReasonForRecord(result, result.backgroundAgeMs),
         category: categoryKey,
         title: entry.title || '',
         url: entry.url || '',
@@ -783,9 +815,7 @@ async function performStaleCheck() {
       category: categoryKey,
       sessionId,
       closedAt: now,
-      reason: result.reason === 'blacklist'
-        ? `blacklist_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`
-        : `idle_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
+      reason: closureReasonForRecord(result, result.backgroundAgeMs),
       lastVisited: entry.lastVisited,
       ageMs: result.backgroundAgeMs,
       dwellMs: entry.dwellMs || 0,
@@ -826,6 +856,7 @@ async function performStaleCheck() {
     closedCount: testMode ? 0 : closedTabs.length,
     taggedCount: testMode ? taggedTabs.length : 0,
     idleContextMultiplier: idleContextMultiplier(retentionContext),
+    idleConfidence: retentionContext.idleConfidence,
   };
 }
 
@@ -912,9 +943,7 @@ async function aiCleanup() {
   const registry = await getTabRegistry();
   const tabCount = Object.keys(registry).length;
   const now = Date.now();
-  const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
-  const currentlyIdle = await browserIsIdle();
-  const retentionContext = { predictedIdle, currentlyIdle };
+  const retentionContext = await buildCleanupContext(settings);
 
   // Already under targets?
   if (mem.percent <= targetMemory && tabCount <= targetTabs) {
@@ -960,6 +989,7 @@ async function aiCleanup() {
 
     const interactions = Math.max(0, entry.interactions || 0);
     const focusBonus = retention.normalizedImportance * 10;
+    const earlyCloseBoost = retention.earlyCloseEligible ? 18 : 0;
 
     const interactionProtection = Math.log2(interactions + 1) * 8;
     const thresholdPressure = retention.maxAgeMs > 0 ? backgroundAgeMs / retention.maxAgeMs : 0;
@@ -968,7 +998,7 @@ async function aiCleanup() {
     const blacklistBoost = blacklistMatch ? -20 : 0;
     const score = entry.category === 'nsfw'
       ? -1000
-      : priority + interactionProtection + focusBonus - idlePenalty + blacklistBoost;
+      : priority + interactionProtection + focusBonus - idlePenalty + blacklistBoost - earlyCloseBoost;
 
     candidates.push({ tabId, entry, score, backgroundAgeMs, retention });
   }
@@ -1139,9 +1169,7 @@ async function getAISuggestion() {
   const registry = await getTabRegistry();
   const protectedTabs = await getProtectedTabIds();
   const learnedThresholds = await getLearnedThresholds();
-  const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
-  const currentlyIdle = await browserIsIdle();
-  const retentionContext = { predictedIdle, currentlyIdle };
+  const retentionContext = await buildCleanupContext(settings);
   let staleCount = 0;
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);

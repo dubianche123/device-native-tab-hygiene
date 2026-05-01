@@ -207,7 +207,7 @@ idleContextMultiplier = 0.75 if chrome.idle is idle/locked, 0.9 inside predicted
 
 The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an auxiliary context weight, not the primary model and not a hard gate. The model-calculated closure time is capped to `[1 min, 2× category default]`, then the user's Settings slider caps it as the final closure time limit. The slider is not a model replacement; it is the upper bound users can reason about.
 
-**Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, idle-context multiplier, and close reason for stale checks / AI Cleanup.
+**Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, idle-context multiplier, and close reason for stale checks / AI Cleanup. When the Mac is actually idle and the tab is within one day of its learned close time, the tab can be marked for an early close rather than waiting for the exact threshold.
 
 **AI Cleanup scoring**: Uses `backgroundAgeMs / effectiveClosureTime` as threshold pressure. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term.
 
