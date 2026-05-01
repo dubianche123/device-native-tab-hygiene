@@ -116,13 +116,14 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 
 - **测试 / 部署模式**：测试模式只学习你的浏览规律，并给“本来会被关闭”的标签页打标；部署模式会真正关闭过期标签页，并写入本地 Closed Log。
 - **按类别保留标签页**：AI 工具、工作、金融、邮箱、参考资料、社交、娱乐、购物、新闻、NSFW 和未分类页面都有各自默认保留时间。Settings 里的滑块现在直接表示“关闭时间上限”，最高 30 天，旁边会同时显示当前机器学习 × 重要度倍率算出的关闭时间，以及最终实际使用的关闭时间。
+- **白名单和定时黑名单**：白名单域名永不关闭。定时黑名单可以按域名设置固定关闭时间，用小时 / 分钟数字输入，最高 99 小时；黑名单流量和白名单一样不进入关闭时间学习。
 - **手动关闭学习**：你在浏览器里直接关掉标签页，或者在插件 Popup 里使用 Close & Log，都会成为本地学习样本。Neural-Janitor 会同时学习前台停留时间和离开前台后的背景时间；自动清理样本只作为上下文记录，避免系统把自己的判断反复强化。
 - **AI Tools 独立分类**：ChatGPT、Claude、Gemini、DeepSeek、Hugging Face、Perplexity、Qwen、Kimi、豆包等 AI 网页会进入单独类别，默认保留 30 天。
 - **节假日感知的闲置预测**：Settings 可以选择日本或中国节假日日历。ML Insights 会把未来 7 天标为 Workday、Weekend 或具体节假日 / 长假区间，例如 Golden Week、国庆假期，并可设置工作日 / 周末假期两组参考睡觉-起床窗口。
 - **AI Cleanup**：插件会优先降低标签页数量，再有限处理内存压力，因为 macOS / Chromium 不一定会在关闭标签后立刻释放内存。它会根据类别优先级、交互次数和闲置时间排序，保护 AI / 工作类标签页，遵守白名单，也会遵守测试模式。
 - **MEM / CPU 监控**：Popup 会显示内存压力、CPU 占用，以及类似 `M3 8T` 的简短芯片 / 线程数标记。
 - **AI Suggestions**：插件会给出减少标签页、运行 AI Cleanup、执行检查等建议，每条建议都可以忽略 10 分钟。点击 Check、AI Clean、切换模式、切换节假日日历、保存设置，以及 Popup 保持打开时，建议都会刷新。
-- **透明 ML 控制台**：Popup 会显示 Native Messaging 连接状态、Model Samples、Closure Samples、Model Readiness、模型准确率、最后本地训练时间、硬件遥测标记、决策置信度 / 启发式估算，以及低功耗推理指示灯。
+- **透明 ML 控制台**：Popup 会把 Idle Model Samples / Idle Model Readiness 和 Close-Time Samples 分开显示，并展示模型准确率、最后本地训练时间、硬件遥测标记、决策置信度 / 启发式估算，以及低功耗推理指示灯。
 - **关闭标签页恢复**：由 Neural-Janitor 关闭的标签页会按类别记录，并可从 Closed Log 单个恢复或勾选多个后批量恢复。
 
 ## 分类关闭时间规则
@@ -294,7 +295,7 @@ Neural-Janitor 学到的本地模型文件默认保存在：
 ~/Library/Application Support/Neural-Janitor/backups/
 ```
 
-导入后重启 Chrome / Edge，或者在扩展管理页 reload 插件，让 companion 重新加载模型。随后打开插件 Popup，确认 **Link: Connected**、**Model Samples**、**Closure Samples** 和 ML runtime label 正常显示。
+导入后重启 Chrome / Edge，或者在扩展管理页 reload 插件，让 companion 重新加载模型。随后打开插件 Popup，确认 **Link: Connected**、**Idle Model Samples**、**Close-Time Samples** 和 ML runtime label 正常显示。
 
 ## Popup 使用方式
 
@@ -303,7 +304,7 @@ Neural-Janitor 学到的本地模型文件默认保存在：
 - **MEM / CPU**：显示当前内存压力、CPU 占用和简短芯片 / 线程数。
 - **AI Suggestions**：显示当前建议和可点击操作。
 - **ML Insights**：显示未来 7 天的闲置窗口，并标注节假日 / 周末 / 工作日。
-- **Settings**：控制 companion 使用、节假日日历、每个类别的关闭时间上限、白名单、目标内存压力、目标标签页数量和强制 AI Cleanup 阈值。
+- **Settings**：控制 companion 使用、节假日日历、每个类别的关闭时间上限、白名单、定时黑名单、目标内存压力、目标标签页数量和强制 AI Cleanup 阈值。
 
 ## 开发检查
 

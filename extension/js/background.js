@@ -77,6 +77,36 @@ function isSearchResultPage(url) {
   return SERP_PATTERNS.some(re => re.test(url));
 }
 
+/**
+ * Returns the matching blacklist entry for a URL, or null.
+ * Pattern matching: substring of hostname or full URL.
+ */
+function matchBlacklist(url, blacklist) {
+  if (!Array.isArray(blacklist) || !url) return null;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    for (const entry of blacklist) {
+      const pattern = (entry.pattern || '').toLowerCase().trim();
+      if (!pattern) continue;
+      if (hostname.includes(pattern) || url.toLowerCase().includes(pattern)) {
+        return entry;
+      }
+    }
+  } catch { /* invalid URL */ }
+  return null;
+}
+
+/**
+ * Convert a blacklist entry's { hours, minutes } into milliseconds.
+ * Defaults to 1 hour if both are zero/missing.
+ */
+function blacklistThresholdMs(entry) {
+  const h = Math.min(99, Math.max(0, parseInt(entry.hours, 10) || 0));
+  const m = Math.min(59, Math.max(0, parseInt(entry.minutes, 10) || 0));
+  const ms = (h * 3_600_000) + (m * 60_000);
+  return ms > 0 ? ms : 3_600_000; // fallback 1 hour
+}
+
 function markProgrammaticClose(tabId, reason) {
   programmaticCloseReasons.set(Number(tabId), reason);
 }
@@ -207,9 +237,11 @@ async function getProtectedTabIds() {
 
 async function recordTabClosureForLearning(entry, type, now = Date.now()) {
   if (!entry?.url) return;
-  // Skip search engine result pages — they are transient navigation
-  // waypoints that would pollute per-category learned thresholds.
+  // Skip search engine result pages — transient navigation waypoints.
   if (isSearchResultPage(entry.url)) return;
+  // Skip blacklisted URLs — they follow fixed rules, not learned heuristics.
+  const settings = await getSettings();
+  if (matchBlacklist(entry.url, settings.blacklist)) return;
   await recordClosureSample({
     type,
     category: entry.category || 'other',
@@ -682,11 +714,27 @@ async function performStaleCheck() {
     // Never close protected tabs (active, pinned, audible in any window)
     if (protectedTabs.has(tabId)) continue;
 
-    // Skip whitelisted URLs
+    // Skip whitelisted URLs (never close)
     if (settings.whitelist.some(w => entry.url?.includes(w))) continue;
 
+    // Blacklist: use fixed threshold, bypass category/learned thresholds
+    const blacklistMatch = matchBlacklist(entry.url, settings.blacklist);
+    const blacklistMaxAgeMs = blacklistMatch ? blacklistThresholdMs(blacklistMatch) : null;
+
     const categoryKey = entry.category || 'other';
-    const result = tabRetentionProfile(entry, settings, learnedThresholds, now);
+    let result;
+    if (blacklistMatch) {
+      const backgroundAgeMs = closureAgeMs(entry, now);
+      result = {
+        backgroundAgeMs,
+        maxAgeMs: blacklistMaxAgeMs,
+        stale: backgroundAgeMs > blacklistMaxAgeMs,
+        reason: 'blacklist',
+        categoryKey,
+      };
+    } else {
+      result = tabRetentionProfile(entry, settings, learnedThresholds, now);
+    }
 
     if (!result.stale) continue;
     staleCount++;
@@ -711,7 +759,9 @@ async function performStaleCheck() {
     if (testMode) {
       // Test mode: tag the tab instead of closing it
       await tagTab(tabId, {
-        reason: `stale_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
+        reason: result.reason === 'blacklist'
+          ? `blacklist_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`
+          : `stale_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
         category: categoryKey,
         title: entry.title || '',
         url: entry.url || '',
@@ -744,7 +794,9 @@ async function performStaleCheck() {
       category: categoryKey,
       sessionId,
       closedAt: now,
-      reason: `idle_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
+      reason: result.reason === 'blacklist'
+        ? `blacklist_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`
+        : `idle_${Math.round(result.backgroundAgeMs / (1000 * 60 * 60))}h`,
       lastVisited: entry.lastVisited,
       ageMs: result.backgroundAgeMs,
       dwellMs: entry.dwellMs || 0,
@@ -887,6 +939,7 @@ async function aiCleanup() {
   }
 
   const whitelist = Array.isArray(settings.whitelist) ? settings.whitelist : [];
+  const blacklist = Array.isArray(settings.blacklist) ? settings.blacklist : [];
   const protectedTabs = await getProtectedTabIds();
   const learnedThresholds = await getLearnedThresholds();
 
@@ -898,22 +951,34 @@ async function aiCleanup() {
     if (protectedTabs.has(tabId)) continue;
     if (whitelist.some(w => entry.url?.includes(w))) continue;
 
+    const blacklistMatch = matchBlacklist(entry.url, blacklist);
     const catInfo = CATEGORIES[entry.category] || {};
     const priority = catInfo.priority ?? 50;
-    const retention = tabRetentionProfile(entry, settings, learnedThresholds, now);
+    let retention = tabRetentionProfile(entry, settings, learnedThresholds, now);
     const backgroundAgeMs = retention.backgroundAgeMs;
+
+    // Blacklisted tabs: only add if they exceed their fixed threshold
+    if (blacklistMatch) {
+      const blMaxAgeMs = blacklistThresholdMs(blacklistMatch);
+      if (backgroundAgeMs < blMaxAgeMs) continue; // not stale yet per blacklist rule
+      retention = {
+        ...retention,
+        maxAgeMs: blMaxAgeMs,
+        thresholdSource: 'blacklist',
+      };
+    }
+
     const interactions = Math.max(0, entry.interactions || 0);
     const focusBonus = retention.normalizedImportance * 10;
 
-    // Score: lower = close first. Category/tag priority protects important
-    // tabs; foreground dwell adds protection; current idle ratio lowers the
-    // score; interactions still raise it.
     const interactionProtection = Math.log2(interactions + 1) * 8;
     const thresholdPressure = retention.maxAgeMs > 0 ? backgroundAgeMs / retention.maxAgeMs : 0;
     const idlePenalty = Math.min(72, thresholdPressure * 24);
+    // Blacklisted tabs get a lower score (more likely to be closed)
+    const blacklistBoost = blacklistMatch ? -20 : 0;
     const score = entry.category === 'nsfw'
       ? -1000
-      : priority + interactionProtection + focusBonus - idlePenalty;
+      : priority + interactionProtection + focusBonus - idlePenalty + blacklistBoost;
 
     candidates.push({ tabId, entry, score, backgroundAgeMs, retention });
   }

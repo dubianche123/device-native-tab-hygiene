@@ -1131,6 +1131,52 @@ body {
   color: var(--success);
 }
 
+.blacklist-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 52px 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.blacklist-row--head {
+  padding: 3px 0;
+  border-top: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.blacklist-row__pattern,
+.blacklist-row__time {
+  min-width: 0;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.blacklist-row__time {
+  text-align: right;
+}
+
+.blacklist-row__remove {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+}
+
+.blacklist-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 6px 0;
+}
+
 textarea {
   width: 100%;
   padding: 8px;
@@ -1169,7 +1215,7 @@ textarea {
   cursor: progress;
 }
 
-/* ── Closure Learning ───────────────────────────────────────────── */
+/* ── Close-Time Learning ────────────────────────────────────────── */
 
 .cl-summary {
   display: flex;
@@ -1203,6 +1249,7 @@ textarea {
 .cl-card__header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: 11px;
 }
@@ -1216,7 +1263,6 @@ textarea {
   color: var(--text-muted);
   font-size: 10px;
   white-space: nowrap;
-  margin-left: auto;
   padding-right: 4px;
 }
 
@@ -1229,6 +1275,7 @@ textarea {
 
 .cl-card__detail {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 3px;
   font-size: 10px;

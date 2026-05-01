@@ -74,15 +74,15 @@
         <span class="power-light" id="power-light" title="Low Power inference visualizer"></span>
       </div>
       <div class="ml-console__row">
-        <span class="ml-console__label">Model Samples</span>
+        <span class="ml-console__label">Idle Model Samples</span>
         <span class="ml-console__value" id="ml-samples">0 / 1,000</span>
       </div>
       <div class="ml-console__row">
-        <span class="ml-console__label">Closure Samples</span>
+        <span class="ml-console__label">Close-Time Samples</span>
         <span class="ml-console__value" id="ml-closure-samples">0 manual / 0 auto</span>
       </div>
       <div class="ml-console__row">
-        <span class="ml-console__label">Model Readiness</span>
+        <span class="ml-console__label">Idle Model Readiness</span>
         <span class="ml-console__value" id="ml-progress-value">0%</span>
       </div>
       <div class="ml-progress">
@@ -152,7 +152,7 @@
       <div id="predictions-content">
         <div class="empty-state">No predictions available. Start the companion app.</div>
       </div>
-      <div class="panel__header" style="margin-top:12px">🧠 Closure Learning</div>
+      <div class="panel__header" style="margin-top:12px">🧠 Close-Time Learning</div>
       <div id="closure-learning-content">
         <div class="empty-state">No closure data yet. Use the browser normally to build learning data.</div>
       </div>
@@ -187,6 +187,11 @@
           <textarea id="setting-whitelist" rows="3" placeholder="One domain per line…"></textarea>
         </div>
         <div class="setting-group">
+          <h3>Timed Blacklist</h3>
+          <div id="blacklist-controls"></div>
+          <button type="button" id="btn-add-blacklist-rule" class="btn btn--sm">Add rule</button>
+        </div>
+        <div class="setting-group">
           <h3>AI Cleanup Targets</h3>
           <label class="setting">
             <span>Target memory pressure</span>
@@ -212,8 +217,8 @@
         </div>
         <button id="btn-save-settings" class="btn btn--primary">Save Settings</button>
         <div class="setting-group" style="margin-top:12px">
-          <h3>Closure Learning</h3>
-          <p class="setting-hint">Sliders set the maximum close-after time. The learned ML time beside each category is still allowed to be shorter.</p>
+          <h3>Close-Time Learning</h3>
+          <p class="setting-hint">Sliders set the maximum close-after time. The learned close time beside each category can still be shorter.</p>
           <button id="btn-reset-learning" class="btn btn--sm btn--danger">Reset Learning Data</button>
         </div>
       </div>

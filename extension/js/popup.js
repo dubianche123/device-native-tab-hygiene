@@ -448,9 +448,13 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   const totalClosureSamples = closureLearning.totalSamples || status.closureLearning?.totalSamples || 0;
   const manualClosureSamples = closureLearning.manualCount || status.closureLearning?.manualCount || 0;
   const autoClosureSamples = closureLearning.autoCount || status.closureLearning?.autoCount || 0;
-  const maturity = typeof status.modelMaturity === 'number'
-    ? status.modelMaturity
-    : Math.min(1, trainingSamples / targetSamples);
+  const maturity = status.modelLoaded
+    ? (
+      typeof status.modelMaturity === 'number'
+        ? status.modelMaturity
+        : Math.min(1, trainingSamples / targetSamples)
+    )
+    : Math.min(1, trainingSamples / minimumSamples);
 
   link.textContent = status.connected ? 'Connected' : 'Disconnected';
   link.style.color = status.connected ? 'var(--success)' : 'var(--danger)';
@@ -475,11 +479,13 @@ function renderMLConsole(status = {}, closureLearning = {}) {
       : 'No closure learning data yet.';
   }
 
-  const maturityPercent = Math.round(Math.max(0, Math.min(1, maturity)) * 100);
-  progress.style.width = `${maturityPercent}%`;
-  progress.parentElement.title = 'Model readiness: valid idle-model samples compared with the target sample count.';
+  const normalizedMaturity = Math.max(0, Math.min(1, maturity));
+  const maturityPercent = Math.round(normalizedMaturity * 100);
+  const readinessLabel = normalizedMaturity > 0 && maturityPercent === 0 ? '<1%' : `${maturityPercent}%`;
+  progress.style.width = `${normalizedMaturity > 0 ? Math.max(1, maturityPercent) : 0}%`;
+  progress.parentElement.title = 'Idle model readiness: valid activity samples compared with the target sample count. Close-time samples are tracked separately.';
   if (progressValue) {
-    progressValue.textContent = `${maturityPercent}%`;
+    progressValue.textContent = readinessLabel;
     progressValue.title = progress.parentElement.title;
   }
   trainingStatus.textContent = status.readinessReason || status.runtimeLabel || 'Checking local runtime';
@@ -974,7 +980,7 @@ async function loadPredictions() {
   bindReferenceScheduleControls(settings);
 }
 
-// ── Closure Learning ─────────────────────────────────────────────────
+// ── Close-Time Learning ───────────────────────────────────────────────
 
 async function loadClosureLearning() {
   const summary = await sendMessage({ type: 'getClosureLearning' });
@@ -999,35 +1005,116 @@ async function loadClosureLearning() {
         ? `<span class="cl-delta ${delta > 0 ? 'cl-delta--up' : 'cl-delta--down'}">${formatSignedAge(delta)}</span>`
         : '';
       const recStr = hasRecommendation
-        ? `→ ${formatAge(s.recommendedThresholdMs)}`
-        : `<span class="cl-need-more">need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} more</span>`;
+        ? `Learned ${formatAge(s.recommendedThresholdMs)}`
+        : `<span class="cl-need-more">Need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} manual</span>`;
 
       return `
         <div class="cl-card">
           <div class="cl-card__header">
             <span class="cl-card__cat" style="color:${color}">${escapeHTML(label)}</span>
-            <span class="cl-card__counts">${s.manualCount}m / ${s.autoCount}a</span>
+            <span class="cl-card__counts">${s.manualCount} manual · ${s.autoCount} auto</span>
             <span class="cl-card__rec">${recStr} ${deltaStr}</span>
           </div>
           <div class="cl-card__detail">
-            <span title="Median foreground dwell">⏱ ${formatAge(s.manualDwellMs)}</span>
-            <span title="Median background age">💤 ${formatAge(s.manualBackgroundAgeMs)}</span>
-            <span title="Default threshold">📏 ${formatAge(s.defaultThresholdMs)}</span>
+            <span title="Median foreground dwell">Foreground ${formatAge(s.manualDwellMs)}</span>
+            <span title="Median background age after leaving foreground">Background ${formatAge(s.manualBackgroundAgeMs)}</span>
+            <span title="Category default close time">Default ${formatAge(s.defaultThresholdMs)}</span>
           </div>
         </div>`;
     }).join('');
 
   container.innerHTML = `
     <div class="cl-summary">
-      <span>${summary.totalSamples} samples</span>
-      <span>${summary.manualCount} manual</span>
-      <span>${summary.autoCount} auto</span>
-      <span>${summary.categoriesWithRecommendations}/${summary.categoriesTracked} adapted</span>
+      <span>Close samples: ${summary.totalSamples}</span>
+      <span>Manual: ${summary.manualCount}</span>
+      <span>Auto context: ${summary.autoCount}</span>
+      <span>Learned categories: ${summary.categoriesWithRecommendations}/${summary.categoriesTracked}</span>
     </div>
     <div class="cl-table">${rows}</div>`;
 }
 
 // ── Settings ─────────────────────────────────────────────────────────
+
+function clampBlacklistHours(value) {
+  return Math.min(99, Math.max(0, parseInt(value, 10) || 0));
+}
+
+function clampBlacklistMinutes(value) {
+  return Math.min(59, Math.max(0, parseInt(value, 10) || 0));
+}
+
+function blacklistRowHTML(entry = {}) {
+  const pattern = String(entry.pattern || '').trim();
+  const hours = clampBlacklistHours(entry.hours ?? 1);
+  const minutes = clampBlacklistMinutes(entry.minutes ?? 0);
+  return `
+    <div class="blacklist-row">
+      <input class="blacklist-row__pattern" type="text" value="${escapeHTML(pattern)}" placeholder="domain or URL contains">
+      <input class="blacklist-row__time blacklist-row__hours" type="number" min="0" max="99" step="1" value="${hours}" aria-label="Blacklist hours">
+      <input class="blacklist-row__time blacklist-row__minutes" type="number" min="0" max="59" step="1" value="${minutes}" aria-label="Blacklist minutes">
+      <button type="button" class="btn btn--xs blacklist-row__remove" title="Remove blacklist rule">×</button>
+    </div>`;
+}
+
+function blacklistHeaderHTML() {
+  return `
+    <div class="blacklist-row blacklist-row--head">
+      <span>Pattern</span>
+      <span>Hours</span>
+      <span>Min</span>
+      <span></span>
+    </div>`;
+}
+
+function wireBlacklistRows() {
+  document.querySelectorAll('.blacklist-row__remove').forEach(btn => {
+    btn.onclick = () => {
+      btn.closest('.blacklist-row')?.remove();
+      const container = document.getElementById('blacklist-controls');
+      if (container && !container.querySelector('.blacklist-row:not(.blacklist-row--head)')) {
+        container.innerHTML = '<div class="blacklist-empty">No timed blacklist rules</div>';
+      }
+    };
+  });
+}
+
+function renderBlacklistControls(entries = []) {
+  const container = document.getElementById('blacklist-controls');
+  if (!container) return;
+  const normalized = Array.isArray(entries)
+    ? entries.filter(entry => String(entry.pattern || '').trim())
+    : [];
+
+  container.innerHTML = normalized.length > 0
+    ? blacklistHeaderHTML() + normalized.map(blacklistRowHTML).join('')
+    : '<div class="blacklist-empty">No timed blacklist rules</div>';
+  wireBlacklistRows();
+}
+
+function addBlacklistRow(entry = {}) {
+  const container = document.getElementById('blacklist-controls');
+  if (!container) return;
+  if (container.querySelector('.blacklist-empty')) container.innerHTML = blacklistHeaderHTML();
+  if (!container.querySelector('.blacklist-row--head')) {
+    container.insertAdjacentHTML('afterbegin', blacklistHeaderHTML());
+  }
+  container.insertAdjacentHTML('beforeend', blacklistRowHTML(entry));
+  wireBlacklistRows();
+}
+
+function collectBlacklistRows() {
+  return [...document.querySelectorAll('#blacklist-controls .blacklist-row')]
+    .map(row => ({
+      pattern: row.querySelector('.blacklist-row__pattern')?.value.trim() || '',
+      hours: clampBlacklistHours(row.querySelector('.blacklist-row__hours')?.value),
+      minutes: clampBlacklistMinutes(row.querySelector('.blacklist-row__minutes')?.value),
+    }))
+    .filter(entry => entry.pattern);
+}
+
+document.getElementById('btn-add-blacklist-rule').addEventListener('click', () => {
+  addBlacklistRow({ pattern: '', hours: 1, minutes: 0 });
+});
 
 async function loadSettings() {
   const settings = await sendMessage({ type: 'getSettings' }) || {};
@@ -1038,6 +1125,7 @@ async function loadSettings() {
   document.getElementById('setting-use-companion').checked = settings.useCompanion !== false;
   document.getElementById('setting-holiday-calendar').value = settings.holidayCalendar || 'none';
   document.getElementById('setting-whitelist').value = (settings.whitelist || []).join('\n');
+  renderBlacklistControls(settings.blacklist || []);
 
   // AI cleanup targets
   const targetMem = settings.aiCleanupTargetMemory || 70;
@@ -1132,6 +1220,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     .split('\n')
     .map(s => s.trim())
     .filter(Boolean);
+  const blacklist = collectBlacklistRows();
 
   const customThresholds = {};
   document.querySelectorAll('#threshold-controls .threshold-row__number').forEach(input => {
@@ -1148,7 +1237,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
 
   await sendMessage({
     type: 'updateSettings',
-    settings: { enabled, useCompanion, holidayCalendar, whitelist, customThresholds, aiCleanupTargetMemory, aiCleanupTargetTabs, aiForceCleanupThreshold },
+    settings: { enabled, useCompanion, holidayCalendar, whitelist, blacklist, customThresholds, aiCleanupTargetMemory, aiCleanupTargetTabs, aiForceCleanupThreshold },
   });
 
   // Flash confirmation

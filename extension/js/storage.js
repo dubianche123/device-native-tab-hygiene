@@ -192,6 +192,7 @@ const DEFAULT_SETTINGS = {
   customThresholds: {},
   useCompanion: true,
   whitelist: [],
+  blacklist: [],      // [{ pattern: string, hours: number, minutes: number }]
   holidayCalendar: 'none',
   idleSchedule: DEFAULT_IDLE_SCHEDULE,
   testMode: false,
@@ -214,11 +215,23 @@ function mergeIdleSchedule(current, next) {
   });
 }
 
+function normalizeBlacklist(entries = []) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .map(entry => ({
+      pattern: String(entry?.pattern || '').trim(),
+      hours: Math.min(99, Math.max(0, parseInt(entry?.hours, 10) || 0)),
+      minutes: Math.min(59, Math.max(0, parseInt(entry?.minutes, 10) || 0)),
+    }))
+    .filter(entry => entry.pattern);
+}
+
 function normalizeSettings(settings = {}) {
   return {
     ...DEFAULT_SETTINGS,
     ...settings,
     idleSchedule: normalizeIdleSchedule(settings.idleSchedule || DEFAULT_IDLE_SCHEDULE),
+    blacklist: normalizeBlacklist(settings.blacklist),
   };
 }
 

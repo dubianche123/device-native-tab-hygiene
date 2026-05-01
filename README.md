@@ -116,13 +116,14 @@ Neural-Janitor uses a narrower but smarter model role. It builds a `MLBoostedTre
 
 - **Test / Deploy modes**: Test mode learns your browsing pattern and tags tabs that would be closed. Deploy mode actually closes stale tabs and records them in the local closed-tab log.
 - **Category-aware retention**: AI tools, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and uncategorized pages each get their own default timeout. Settings expose each category as a **maximum close-after time** slider up to 30 days, with the current ML × importance close time and final used time shown beside it.
+- **Whitelist and timed blacklist**: Whitelisted domains are never closed. Timed blacklist rules use a fixed per-domain close time with numeric hours/minutes, capped at 99 hours, and are excluded from closure learning just like whitelist traffic.
 - **Manual closure learning**: Browser tab closes and the popup's Close & Log action become local learning samples. Neural-Janitor learns from foreground dwell and time spent in the background, while automatic cleanup samples are kept as context only so the system does not reinforce its own decisions.
 - **AI Tools category**: ChatGPT, Claude, Gemini, DeepSeek, Hugging Face, Perplexity, Qwen, Kimi, Doubao, and similar tools are classified separately and default to a 30-day retention window.
 - **Holiday-aware idle predictions**: Settings can enable Japanese or Chinese holiday calendars. The ML Insights panel marks each predicted day as Workday, Weekend, or a named holiday / extended period such as Golden Week or National Day, and includes workday / weekend reference sleep-wake windows for fallback predictions.
 - **AI Cleanup**: The popup can close or tag low-importance tabs to reduce tab count first, with bounded memory-pressure cleanup because macOS / Chromium may reclaim memory lazily. It protects high-priority categories such as AI tools and work tabs, honors the whitelist, and respects Test mode.
 - **Memory and CPU monitor**: The popup shows memory pressure, CPU usage, and a compact CPU model / thread label such as `M3 8T`.
 - **AI Suggestions**: The popup recommends actions such as reducing tab count or running AI Cleanup, and each recommendation can be ignored for 10 minutes. Suggestions refresh when you run Check, run AI Clean, change modes, change the holiday calendar, save settings, and periodically while the popup is open.
-- **Transparent ML console**: The popup shows Native Messaging link state, Model Samples, Closure Samples, Model Readiness, model accuracy when available, last local retrain time, hardware telemetry markers, decision confidence / heuristic estimates, and a low-power inference indicator.
+- **Transparent ML console**: The popup separates Idle Model Samples / Idle Model Readiness from Close-Time Samples, then shows model accuracy when available, last local retrain time, hardware telemetry markers, decision confidence / heuristic estimates, and a low-power inference indicator.
 - **Closed-tab recovery**: Tabs closed by Neural-Janitor are logged by category and can be restored from the Closed Log, either one-by-one or by selecting multiple entries and restoring them together.
 
 ## Category Closure Time Rules
@@ -294,7 +295,7 @@ The import script verifies checksums, backs up existing local artifacts under:
 ~/Library/Application Support/Neural-Janitor/backups/
 ```
 
-After importing, restart Chrome / Edge or reload the extension so the companion reloads the model. Open the popup and check **Link: Connected**, **Model Samples**, **Closure Samples**, and the ML runtime label.
+After importing, restart Chrome / Edge or reload the extension so the companion reloads the model. Open the popup and check **Link: Connected**, **Idle Model Samples**, **Close-Time Samples**, and the ML runtime label.
 
 ## Using The Popup
 
@@ -303,7 +304,7 @@ After importing, restart Chrome / Edge or reload the extension so the companion 
 - **MEM / CPU**: Shows current memory pressure, CPU usage, and compact CPU model / thread count.
 - **AI Suggestions**: Shows current recommendations and action buttons.
 - **ML Insights**: Shows idle windows for the next seven days, including holiday / weekend / workday labels.
-- **Settings**: Controls companion usage, holiday calendar, per-category maximum close-after times, whitelist, target memory pressure, target tab count, and forced AI Cleanup threshold.
+- **Settings**: Controls companion usage, holiday calendar, per-category maximum close-after times, whitelist, timed blacklist, target memory pressure, target tab count, and forced AI Cleanup threshold.
 
 ## Development Checks
 
