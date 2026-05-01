@@ -42,6 +42,8 @@ let appSupportDir: URL = {
     return dir
 }()
 
+let resetRequestURL = appSupportDir.appendingPathComponent("reset_learning_request.json")
+
 // MARK: - Native Messaging Protocol
 
 func readMessage() -> [String: Any]? {
@@ -168,6 +170,15 @@ final class ActivityStore {
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         try? data.write(to: fileURL, options: .atomic)
     }
+
+    func reset() {
+        lock.lock()
+        events = []
+        lock.unlock()
+        try? FileManager.default.removeItem(at: fileURL)
+        let legacyURL = appSupportDir.appendingPathComponent("activity_log.json")
+        try? FileManager.default.removeItem(at: legacyURL)
+    }
 }
 
 // MARK: - Idle Prediction Engine
@@ -257,7 +268,8 @@ final class IdlePredictor {
         holidayLevel: Int = 0,
         holidayLevels: [Int: Int] = [:],
         idleSchedule: IdleReferenceSchedule = .defaultValue
-    ) -> [IdlePrediction] {
+    ) -> ([IdlePrediction], Bool) {
+        let resetApplied = applyPendingResetIfNeeded()
         maybeTrainIfNeeded()
         lastInferenceAt = Date()
         inferenceCount += 1
@@ -309,10 +321,11 @@ final class IdlePredictor {
                 ))
             }
         }
-        return predictions
+        return (predictions, resetApplied)
     }
 
     func retrain() throws {
+        _ = applyPendingResetIfNeeded()
         lastTrainingAttempt = Date()
         let events = store.all().sorted { $0.timestamp < $1.timestamp }
         guard events.count >= 100 else {
@@ -344,12 +357,15 @@ final class IdlePredictor {
     func healthPayload(
         activityCount: Int,
         holidayLevel: Int = 0,
-        idleSchedule: IdleReferenceSchedule = .defaultValue
+        idleSchedule: IdleReferenceSchedule = .defaultValue,
+        resetRequested: Bool = false
     ) -> [String: Any] {
+        let resetApplied = applyPendingResetIfNeeded()
+        let effectiveActivityCount = (resetRequested || resetApplied) ? store.count : activityCount
         let shouldRefreshMetrics = lastMetricsRefresh
             .map { Date().timeIntervalSince($0) > 15 * 60 } ?? true
         if shouldRefreshMetrics {
-            refreshMetricsIfNeeded(activityCount: activityCount)
+            refreshMetricsIfNeeded(activityCount: effectiveActivityCount)
         }
 
         let usingCoreML = model != nil
@@ -368,6 +384,7 @@ final class IdlePredictor {
             ? "Core ML selects the exact ANE/GPU/CPU target internally; public APIs expose availability and requested compute units, not the per-inference processor."
             : "Core ML model is not loaded yet, so predictions use a local fallback while more browser activity is collected and retraining continues."
         let runtimeLabel = usingCoreML ? "Model" : (!lookup.isEmpty ? "Learning" : "Fallback")
+        let resetFlag = resetRequested || resetApplied
         var payload: [String: Any] = [
             "type": "health",
             "protocolVersion": ipcProtocolVersion,
@@ -385,7 +402,7 @@ final class IdlePredictor {
             "minimumTrainingSamples": 100,
             "modelMaturity": maturity,
             "modelAccuracy": modelAccuracyValue,
-            "readinessReason": readinessReason(activityCount: activityCount),
+            "readinessReason": readinessReason(activityCount: effectiveActivityCount),
             "currentIdleConfidence": decision["currentIdleConfidence"] ?? 0.0,
             "confidenceCurve": decision["confidenceCurve"] ?? [],
             "decisionThreshold": 0.55,
@@ -404,6 +421,7 @@ final class IdlePredictor {
             "sampledAt": Date().timeIntervalSince1970 * 1000,
             "note": runtimeNote,
             "currentActivityState": currentActivityState(),
+            "resetRequested": resetFlag,
         ]
 
         if let stateAt = currentActivityStateAtMs() {
@@ -488,6 +506,48 @@ final class IdlePredictor {
     private func saveMetrics() {
         guard let data = try? JSONEncoder().encode(metrics) else { return }
         try? data.write(to: metricsURL, options: .atomic)
+    }
+
+    private func writeResetRequest() {
+        let payload: [String: Any] = [
+            "requestedAt": Date().timeIntervalSince1970 * 1000,
+            "reason": "manual_reset",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? data.write(to: resetRequestURL, options: .atomic)
+    }
+
+    private func consumeResetRequest() -> Bool {
+        guard FileManager.default.fileExists(atPath: resetRequestURL.path) else { return false }
+        try? FileManager.default.removeItem(at: resetRequestURL)
+        return true
+    }
+
+    func resetLearningArtifacts(writeSentinel: Bool = false) {
+        store.reset()
+        model = nil
+        lookup = [:]
+        metrics = ModelMetrics()
+        lastTrainingAttempt = nil
+        lastTrainingCompletedAt = nil
+        lastInferenceAt = nil
+        lastMetricsRefresh = nil
+        inferenceCount = 0
+        let urls = [modelURL, lookupURL, metricsURL]
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        }
+        if writeSentinel {
+            writeResetRequest()
+        }
+        writeLog("Reset local learning artifacts")
+    }
+
+    @discardableResult
+    private func applyPendingResetIfNeeded() -> Bool {
+        guard consumeResetRequest() else { return false }
+        resetLearningArtifacts(writeSentinel: false)
+        return true
     }
 
     private func latestArtifactModifiedAt() -> Date? {
@@ -1204,6 +1264,12 @@ let store = ActivityStore()
 let predictor = IdlePredictor(store: store)
 let pageClassifier = LocalPageClassifier()
 
+if CommandLine.arguments.contains("--reset-learning") {
+    predictor.resetLearningArtifacts(writeSentinel: true)
+    print("[Neural-Janitor] Reset local learning artifacts and queued browser-state reset")
+    exit(EXIT_SUCCESS)
+}
+
 writeLog("\(appName) Companion started; \(engineCodename) online (pid: \(ProcessInfo.processInfo.processIdentifier))")
 
 DispatchQueue.global(qos: .utility).async {
@@ -1248,7 +1314,7 @@ while true {
         let holidayLevel = intFromJSON(message["holidayLevel"]) ?? 0
         let holidayLevels = holidayLevelMap(from: message["holidayLevels"])
         let idleSchedule = idleScheduleFromJSON(message["idleSchedule"])
-        let predictions = predictor.predict(
+        let (predictions, resetApplied) = predictor.predict(
             holidayLevel: holidayLevel,
             holidayLevels: holidayLevels,
             idleSchedule: idleSchedule
@@ -1272,7 +1338,8 @@ while true {
             "health": predictor.healthPayload(
                 activityCount: store.count,
                 holidayLevel: holidayLevel,
-                idleSchedule: idleSchedule
+                idleSchedule: idleSchedule,
+                resetRequested: resetApplied
             ),
         ])
 
@@ -1308,6 +1375,18 @@ while true {
         )
         payload["version"] = "1.0.0"
         writeMessage(payload)
+
+    case "resetLearningState":
+        predictor.resetLearningArtifacts(writeSentinel: false)
+        writeMessage([
+            "type": "resetLearningStateResult",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
+            "ok": true,
+            "resetRequested": true,
+            "modelMode": predictor.mode,
+        ])
 
     case "classifyURL":
         var result = pageClassifier.classify(

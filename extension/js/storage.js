@@ -216,6 +216,15 @@ export async function clearRestoredClosedRecords() {
   return { ok: true, removedCount };
 }
 
+export async function resetLearningState() {
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.CLOSURE_LEARNING,
+    STORAGE_KEYS.DOMAIN_CATEGORY_MEMORY,
+    STORAGE_KEYS.IDLE_PREDICTIONS,
+  ]);
+  return { ok: true };
+}
+
 // ── Idle Predictions (from ML companion) ──────────────────────────────
 
 export async function getIdlePredictions() {

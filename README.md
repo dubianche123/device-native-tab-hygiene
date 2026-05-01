@@ -253,9 +253,16 @@ Reload the browser extension after importing so the companion reloads the model.
 - **Check**: Reviews stale tabs immediately and tags them without closing anything.
 - **AI Clean**: Uses tab count, memory pressure, importance, and whitelist rules to decide what to clean.
 - **AI Suggestions**: Shows when Deploy mode is ready, or when it is safer to stay in Test a little longer.
+- **Reset Model State**: Clears closure learning, domain-memory shortcuts, idle predictions, and the local companion artifacts.
 - **MEM / CPU**: Shows current memory pressure, CPU usage, and compact CPU model / thread count.
 - **ML Insights**: Shows idle windows for the next seven days with workday, weekend, or holiday labels.
 - **Settings**: Controls companion usage, calendar selection, close-time caps, whitelist, timed blacklist, and AI Cleanup targets.
+
+If you prefer the terminal, run:
+
+```bash
+scripts/reset_model_state.sh
+```
 
 ## Development Checks
 

@@ -25,6 +25,7 @@ import {
   getCompanionStatus,
   markClosedRecordRestored,
   removeClosedRecords, clearRestoredClosedRecords,
+  resetLearningState as clearLearningState,
   getReturnNotification, setReturnNotification, clearReturnNotification,
   getActiveSession, setActiveSession, clearActiveSession,
   getTaggedTabs, tagTab, untagTab, clearAllTags,
@@ -32,13 +33,14 @@ import {
 } from './storage.js';
 import { categorizePage } from './categorizer.js';
 import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
-import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary, resetClosureLearning } from './closure-learner.js';
+import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary } from './closure-learner.js';
 import {
   classifyURL,
   connectToCompanion,
   recordActivity,
   requestCompanionHealth,
   requestPredictions,
+  resetCompanionLearning,
   isInIdleWindow,
 } from './idle-detector.js';
 
@@ -1483,13 +1485,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             },
           });
         } else {
-          const [health, closureLearning] = await Promise.all([
-            requestCompanionHealth(),
-            getLearningSummary(),
-          ]);
+          const health = await requestCompanionHealth();
+          if (health?.resetRequested) {
+            await clearLearningState();
+          }
+          const closureLearning = await getLearningSummary();
           sendResponse({
             ...health,
             closureLearning,
+            resetApplied: Boolean(health?.resetRequested),
           });
         }
         break;
@@ -1595,10 +1599,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'getLearnedThresholds':
         sendResponse(await getLearnedThresholds());
         break;
-      case 'resetClosureLearning':
-        await resetClosureLearning();
-        sendResponse({ ok: true });
+      case 'resetLearningState': {
+        const settings = await getSettings();
+        if (settings.useCompanion !== false) {
+          await resetCompanionLearning().catch(() => null);
+        }
+        await clearLearningState();
+        sendResponse({ ok: true, resetApplied: true });
         break;
+      }
+      case 'resetClosureLearning': {
+        await clearLearningState();
+        sendResponse({ ok: true, resetApplied: true });
+        break;
+      }
+      case 'companionResetRequested': {
+        await clearLearningState();
+        sendResponse({ ok: true, resetApplied: true });
+        break;
+      }
       default:
         sendResponse({ error: 'Unknown message type' });
     }

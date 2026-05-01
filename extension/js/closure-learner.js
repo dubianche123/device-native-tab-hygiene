@@ -31,6 +31,7 @@ const MANUAL_TYPES = new Set(['manual_browser_close', 'manual_popup_close']);
 const VALID_TYPES = new Set([...MANUAL_TYPES, 'auto_cleanup']);
 const SHORT_SESSION_FLOOR_MS = 2 * 60 * 1000;
 const IMPORTANT_SESSION_FLOOR_MS = 10 * 60 * 1000;
+const ENTERTAINMENT_SESSION_FLOOR_MS = 20 * 60 * 1000;
 const UNCATEGORIZED_SESSION_FLOOR_MS = 12 * 60 * 60 * 1000;
 const IMPORTANT_CATEGORIES = new Set(['ai', 'work', 'email', 'reference', 'finance']);
 
@@ -71,7 +72,13 @@ function isManualClosure(type) {
 
 function learnedThresholdFloor(category) {
   if (category === DEFAULT_CATEGORY.key) return UNCATEGORIZED_SESSION_FLOOR_MS;
+  if (category === 'entertainment') return ENTERTAINMENT_SESSION_FLOOR_MS;
   return IMPORTANT_CATEGORIES.has(category) ? IMPORTANT_SESSION_FLOOR_MS : SHORT_SESSION_FLOOR_MS;
+}
+
+function requiredManualSamples(category) {
+  if (category === 'entertainment') return 5;
+  return MIN_MANUAL_SAMPLES;
 }
 
 // ── Record a closure sample ───────────────────────────────────────────
@@ -135,19 +142,20 @@ function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key) 
   const recommendationDwellSamples = b.manualDwell.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
   const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
   const thresholdFloor = learnedThresholdFloor(defaultCategory);
+  const sampleRequirement = requiredManualSamples(defaultCategory);
 
   let recommendedThresholdMs = null;
   let thresholdDelta = null;
   const recommendationSampleCount = Math.max(validBackgroundSamples.length, recommendationDwellSamples.length);
 
-  if (validBackgroundSamples.length >= MIN_MANUAL_SAMPLES) {
+  if (validBackgroundSamples.length >= sampleRequirement) {
     const medianBackgroundAge = median(validBackgroundSamples);
     recommendedThresholdMs = Math.max(
       thresholdFloor,
       Math.min(defaultThreshold * 2, medianBackgroundAge * 1.5),
     );
     thresholdDelta = recommendedThresholdMs - defaultThreshold;
-  } else if (recommendationDwellSamples.length >= MIN_MANUAL_SAMPLES) {
+  } else if (recommendationDwellSamples.length >= sampleRequirement) {
     const recommendationDwellMs = median(recommendationDwellSamples);
     recommendedThresholdMs = Math.max(
       thresholdFloor,

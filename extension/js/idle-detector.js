@@ -112,6 +112,9 @@ function handleCompanionMessage(msg) {
     setIdlePredictions(msg.predictions);
     if (msg.health) {
       setCompanionStatus(normalizeHealthStatus({ connected: true, lastSync: Date.now(), ...msg.health }));
+      if (msg.health.resetRequested) {
+        chrome.runtime.sendMessage({ type: 'companionResetRequested' }).catch(() => {});
+      }
     }
     console.log('[Neural-Janitor] Updated idle predictions from ML model:', msg.predictions);
   } else if (msg.type === 'health') {
@@ -216,6 +219,9 @@ export async function requestPredictions() {
           activityCount: response.activityCount || 0,
           ...(response.health || {}),
         }));
+        if (response.health?.resetRequested) {
+          chrome.runtime.sendMessage({ type: 'companionResetRequested' }).catch(() => {});
+        }
       }
       return response.predictions;
     }
@@ -259,6 +265,25 @@ export async function requestCompanionHealth() {
 
   const status = await getCompanionStatus();
   return status.connected ? status : await disconnectedStatus();
+}
+
+/**
+ * Request the companion to wipe its local learning artifacts.
+ */
+export async function resetCompanionLearning() {
+  if (!nativePort) connectToCompanion();
+  try {
+    const response = await sendToCompanion({ type: 'resetLearningState' });
+    if (response?.ok) {
+      const status = await requestCompanionHealth().catch(() => null);
+      return { ok: true, response, status };
+    }
+  } catch (err) {
+    const status = await disconnectedStatus(err.message);
+    await setCompanionStatus(status);
+    return { ok: false, error: err.message, status };
+  }
+  return { ok: false, error: 'Companion did not confirm reset' };
 }
 
 /**

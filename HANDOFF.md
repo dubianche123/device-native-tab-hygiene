@@ -176,6 +176,7 @@ Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
 - **Manual Check**: popup `Check` sends `forceCheck`, which now calls `performStaleCheck({ dryRun: true, source: "manual_check" })`. It refreshes stale-tab tags and reports counts, but never closes tabs, even while Deploy is active. Use `AI Clean` or scheduled auto-cleanup for real closure.
 - Tags cleared at start of each scan (`clearAllTags()`), so each run shows fresh results.
 - Idle-context acceleration is only applied while `chrome.idle` reports `idle` or `locked`. A model can still show a high time-window prior while the user is active, but active state suppresses the cleanup multiplier and high-confidence early-close path.
+- `Reset Model State` is available both in the popup and via `scripts/reset_model_state.sh`. It clears closure learning, root-domain memory, idle predictions, and companion-side artifacts. The shell script writes a reset request so the live native host clears its in-memory store on the next message.
 
 Setting: `testMode` (boolean, default `true` on fresh installs; existing installs keep their saved value).
 
@@ -286,6 +287,8 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 **Timed blacklist**: Settings store `blacklist` as `[{ pattern, hours, minutes }]`. Matching is substring-based against hostname or full URL. Blacklist entries use fixed close time (`0–99` hours, `0–59` minutes, fallback 1 hour), bypass category/learned thresholds, and are excluded from closure learning like whitelist traffic. `performStaleCheck()` records blacklist closes with `blacklist_*` reason; AI Cleanup can close blacklisted tabs only after their fixed time has elapsed.
 
 **Popup UI**: Settings sliders are user-facing maximum close-after times, not abstract model thresholds. Each category row shows the learned close-time estimate and the final used time (`min(learned estimate, slider cap)`). The console treats close-time learning as primary: `Close-Time Samples` and `Close-Time Readiness` describe manual close learning, while `Context Samples` are auxiliary idle/activity signals. The decision panel splits current system activity (`Active now` / `Idle now`) from the model's idle likelihood, so active use does not get mislabeled as sleep. "Close-Time Learning" in ML Insights shows per-category stats plus top root-domain fallback stats (manual/auto counts, median foreground dwell, median background age, learned recommendation vs default, delta). Reset button in Settings.
+
+**Entertainment guardrail**: `entertainment` now needs more manual samples and has a higher minimum learned floor, so a few short closes cannot collapse it to a 2-3 minute retention window.
 
 **Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `getLearnedThresholds`, `getCategoryClosureStats`, `getDomainClosureStats`, `getLearningSummary`, `resetClosureLearning`.
 

@@ -382,18 +382,17 @@ function activityHeadlineText(status = {}) {
 function idleLikelihoodText(status = {}, confidence = 0) {
   const formatted = formatPercent(confidence);
   const currentState = String(status.currentActivityState || '').toLowerCase();
-  const activeSuffix = currentState === 'active' ? ' (active now)' : '';
   const metric = currentState === 'active' ? 'idle prior' : 'idle likelihood';
   if (status.runtime === 'coreml') {
-    return `${acceleratorLabel(status)} ${metric}: ${formatted}${activeSuffix}`;
+    return `${acceleratorLabel(status)} ${metric}: ${formatted}`;
   }
   if (status.runtime === 'lookup') {
-    return `Learning ${metric}: ${formatted}${activeSuffix}`;
+    return `Learning ${metric}: ${formatted}`;
   }
   if (status.runtime === 'disabled') {
     return 'ML off: no idle estimate';
   }
-  return `Fallback ${metric}: ${formatted}${activeSuffix}`;
+  return `Fallback ${metric}: ${formatted}`;
 }
 
 function retrainRuntimeLabel(status = {}) {
@@ -548,9 +547,7 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   decision.textContent = activityHeadlineText(status);
   if (decisionSubline) {
     decisionSubline.textContent = idleLikelihoodText(status, confidence);
-    decisionSubline.title = String(status.currentActivityState || '').toLowerCase() === 'active'
-      ? 'This is the model prior for the current time window; active browser state prevents current-idle early-close behavior.'
-      : (status.readinessReason || '');
+    decisionSubline.title = status.readinessReason || '';
   }
   decision.title = status.readinessReason || '';
   renderConfidenceCurve(status.confidenceCurve || []);
@@ -1371,14 +1368,17 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
 
 document.getElementById('btn-reset-learning').addEventListener('click', async () => {
   const btn = document.getElementById('btn-reset-learning');
-  if (!confirm('Reset all closure learning data? This cannot be undone.')) return;
+  if (!confirm('Reset all local learning state? This cannot be undone.')) return;
   btn.disabled = true;
   btn.textContent = 'Resetting…';
-  await sendMessage({ type: 'resetClosureLearning' });
+  await sendMessage({ type: 'resetLearningState' });
   btn.textContent = '✓ Reset';
+  await loadPredictions();
   await loadClosureLearning();
+  await updateStatus();
+  await updateAISuggestions();
   setTimeout(() => {
-    btn.textContent = 'Reset Learning Data';
+    btn.textContent = 'Reset Model State';
     btn.disabled = false;
   }, 1500);
 });

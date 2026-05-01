@@ -256,6 +256,13 @@ Neural-Janitor 的学习成果保存在：
 - **ML Insights**：显示未来七天的闲置窗口，包含工作日、周末或节假日标签。
 - **Settings**：控制是否使用伴随程序、日历选择、关闭时间上限、白名单、定时黑名单和 AI Cleanup 目标。
 - **AI Suggestions**：会提示什么时候可以切到 Deploy，或者什么时候更适合继续留在 Test。
+- **Reset Model State**：清空关闭学习、域名记忆、idle 预测和本地 companion 学习文件。
+
+如果你更习惯命令行，直接运行：
+
+```bash
+scripts/reset_model_state.sh
+```
 
 ## 开发检查
 
