@@ -23,56 +23,75 @@ Underneath the browser extension, the system records lightweight behavioral sign
 ## Runtime Dataflow (C4 Container View)
 
 ```mermaid
-flowchart LR
-  user(["Person<br/>Browser user"])
+flowchart TB
+  subgraph actors["External actors and platform APIs"]
+    direction LR
+    user(["Person<br/>Browser user"])
+    chrome[["🧩 Chrome / Edge APIs<br/>tabs · idle · sessions · system"]]
+  end
 
   subgraph browser["Container: Chrome / Edge Extension (Manifest V3)"]
-    popup["Popup UI<br/>Modes, settings, ML console"]
-    tracker["Tab Tracker<br/>Focus, dwell time, interactions"]
-    category["Category Engine<br/>Domain map + local signals"]
-    hygiene["Hygiene Orchestrator<br/>Check, AI Clean, test tags"]
-    ipc["Native Messaging Client<br/>Protocol v2 JSON"]
-    closedLog[("Closed Tab Log<br/>Restore records")]
-    settings[("Local Settings<br/>Thresholds, calendar, whitelist")]
+    direction LR
+    popup["🖥️ Popup UI<br/>Modes · Settings · ML console"]
+    tracker["📍 Tab Tracker<br/>Focus · dwell · interactions"]
+    category["🏷️ Category Engine<br/>Domain map · local signals"]
+    hygiene["🧹 Hygiene Orchestrator<br/>Check · AI Clean · test tags"]
+    settings[("⚙️ Local Settings<br/>thresholds · calendar · whitelist")]
+    closedLog[("↩️ Closed Tab Log<br/>restore records")]
+  end
+
+  subgraph dataflow["IPC and local learning loop"]
+    direction LR
+    sampleBus["Activity samples<br/>tab state · page metadata"]
+    nativeBus["Native Messaging<br/>Protocol v2 JSON over stdio"]
+    resultBus["Predictions · health · classification<br/>idle windows · telemetry"]
   end
 
   subgraph native["Container: macOS Swift Companion"]
-    collector["Activity Collector<br/>Idle state + tab context"]
-    classifier["Local Page Classifier<br/>NaturalLanguage scoring"]
-    predictor["The Chronos Engine<br/>9-feature Core ML predictor"]
-    artifacts[("Application Support<br/>Events, lookup, model metrics")]
+    direction LR
+    collector["📥 Activity Collector<br/>idle state · tab context"]
+    classifier["🔤 Local Page Classifier<br/>NaturalLanguage scoring"]
+    predictor["🧠 The Chronos Engine<br/>9-feature Core ML predictor"]
+    artifacts[("🗄️ Application Support<br/>events · lookup · model metrics")]
   end
 
-  coreml[["Apple Core ML Runtime<br/>ANE / GPU / CPU scheduler"]]
-  chrome[["Chrome / Edge APIs<br/>tabs, idle, sessions, system"]]
+  coreml[["⚡ Apple Core ML Runtime<br/>ANE · GPU · CPU scheduler"]]
 
-  user -->|"Opens popup / changes settings"| popup
-  chrome -->|"Tab, idle, session, MEM/CPU signals"| tracker
-  popup -->|"Manual Check / AI Clean"| hygiene
+  user --> popup
+  chrome --> tracker
+  popup --> hygiene
   tracker --> category --> hygiene
   settings --> hygiene
-  hygiene -->|"Close, tag, restore"| chrome
+  hygiene -->|"close · tag · restore"| chrome
   hygiene --> closedLog
-  tracker -->|"Activity samples"| ipc
-  category -->|"Ambiguous page metadata"| ipc
-  ipc <-->|"Native Messaging stdio"| collector
-  ipc <-->|"Predictions, health, classification"| predictor
+  tracker --> sampleBus
+  category --> sampleBus
+  sampleBus --> nativeBus --> collector
+  category --> nativeBus --> classifier
   collector --> artifacts
   artifacts --> predictor
   classifier --> predictor
-  predictor --> coreml
-  coreml -->|"Idle confidence curve"| predictor
+  predictor <--> coreml
+  predictor --> resultBus --> popup
+  classifier --> resultBus
+
+  style actors fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px
+  style dataflow fill:none,stroke:#94a3b8,stroke-width:1px
 
   classDef person fill:#f9f2d7,stroke:#b59b3b,color:#2f2611,stroke-width:1px
   classDef browser fill:#e9f7ff,stroke:#2684b8,color:#102a3a,stroke-width:1.5px
   classDef native fill:#ecfdf3,stroke:#2f9d66,color:#123522,stroke-width:1.5px
+  classDef ml fill:#eef2ff,stroke:#6366f1,color:#111827,stroke-width:2px
   classDef data fill:#fff7ed,stroke:#d97706,color:#3a2206,stroke-width:1px
+  classDef bus fill:none,stroke:#94a3b8,color:#334155,stroke-width:1px
   classDef external fill:#f3f4f6,stroke:#6b7280,color:#1f2937,stroke-width:1px
 
   class user person
-  class popup,tracker,category,hygiene,ipc browser
-  class collector,classifier,predictor native
+  class popup,tracker,category,hygiene browser
+  class collector,classifier native
+  class predictor ml
   class closedLog,settings,artifacts data
+  class sampleBus,nativeBus,resultBus bus
   class coreml,chrome external
 ```
 
