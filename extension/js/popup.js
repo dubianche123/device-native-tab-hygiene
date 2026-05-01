@@ -18,6 +18,7 @@ const IMPORTANCE_MULTIPLIER_MIN = 0.75;
 const IMPORTANCE_MULTIPLIER_MAX = 1.75;
 const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const AI_SUGGESTION_MUTE_MS = 10 * 60 * 1000;
 
 function formatAge(ms) {
   ms = Math.max(0, ms || 0);
@@ -44,6 +45,11 @@ function formatRelativeTime(timestampMs) {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+function formatRemaining(ms) {
+  const mins = Math.max(1, Math.ceil((ms || 0) / 60_000));
+  return mins >= 60 ? `${Math.ceil(mins / 60)}h` : `${mins}m`;
 }
 
 function formatPercent(value, digits = 0) {
@@ -90,6 +96,13 @@ function shortCPUModel(model) {
 
 function getCategoryInfo(key) {
   return CATEGORIES[key] || { label: 'Other', color: DEFAULT_CATEGORY.color };
+}
+
+function configurableCategories() {
+  return {
+    ...CATEGORIES,
+    [DEFAULT_CATEGORY.key]: DEFAULT_CATEGORY,
+  };
 }
 
 function getDomain(url) {
@@ -958,7 +971,7 @@ async function loadSettings() {
 
   // Build closure-time cap controls.
   const container = document.getElementById('threshold-controls');
-  const controlsRows = Object.entries(CATEGORIES).map(([key, cat]) => {
+  const controlsRows = Object.entries(configurableCategories()).map(([key, cat]) => {
     const timing = categoryClosureTiming(key, registry, learnedThresholds, settings);
     const current = timing.capTime;
     const currentDays = Math.min(30, Math.max(0.1, current / DAY_MS));
@@ -1250,6 +1263,15 @@ async function updateAISuggestions() {
   const container = document.getElementById('ai-suggestions-list');
   if (!container) return;
 
+  if (data.muted) {
+    container.innerHTML = `
+      <div class="ai-suggestion ai-suggestion--ok">
+        <span>⏸</span>
+        <span class="ai-suggestion__text">Suggestions muted for ${escapeHTML(formatRemaining((data.mutedUntil || 0) - Date.now()))}</span>
+      </div>`;
+    return;
+  }
+
   const levelClass = {
     critical: 'ai-suggestion--critical',
     warning: 'ai-suggestion--warning',
@@ -1262,7 +1284,10 @@ async function updateAISuggestions() {
     const btn = s.action
       ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : '🔍 Check'}</button>`
       : '';
-    return `<div class="ai-suggestion ${cls}"><span>${s.icon}</span> ${escapeHTML(s.text)}${btn}</div>`;
+    const ignore = s.level !== 'ok'
+      ? '<button class="btn btn--xs ai-suggestion__ignore" title="Hide AI Suggestions for 10 minutes">Ignore</button>'
+      : '';
+    return `<div class="ai-suggestion ${cls}"><span>${s.icon}</span><span class="ai-suggestion__text">${escapeHTML(s.text)}</span>${btn}${ignore}</div>`;
   }).join('');
 
   container.querySelectorAll('.ai-suggestion__action').forEach(btn => {
@@ -1276,6 +1301,17 @@ async function updateAISuggestions() {
         document.getElementById('btn-force-check')?.click();
       }
       setTimeout(() => updateAISuggestions(), 2000);
+    });
+  });
+
+  container.querySelectorAll('.ai-suggestion__ignore').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      await sendMessage({
+        type: 'updateSettings',
+        settings: { aiSuggestionsMutedUntil: Date.now() + AI_SUGGESTION_MUTE_MS },
+      });
+      await updateAISuggestions();
     });
   });
 }

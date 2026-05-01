@@ -218,7 +218,7 @@ score = categoryPriority + log₂(interactions + 1) × 8 - min(72, backgroundAge
 - `effectiveClosureTime` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists, then applies the user's closure time limit.
 - **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
 - High-priority categories such as AI/work are protected; long idle time lowers the score; interactions raise it.
-- Re-checks memory every 5 closures; stops if pressure < target.
+- Tab count is the primary stop condition. If tab count starts above `aiCleanupTargetTabs`, cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily.
 
 **Settings**:
 - `aiCleanupTargetMemory` — target memory % after cleanup (default 70%).
@@ -228,12 +228,12 @@ score = categoryPriority + log₂(interactions + 1) × 8 - min(72, backgroundAge
 ## AI Suggestions Panel
 
 Below memory bar in popup. `getAISuggestion()` in background.js analyzes current state and returns suggestions with levels:
-- 🔴 `critical` — memory ≥ 90% or tabs ≥ 80.
-- 🟡 `warning` — memory ≥ 75% or tabs ≥ 50.
-- 🔵 `info` — stale tabs > 10 or memory ≥ 60%.
+- 🔴 `critical` — memory ≥ `aiForceCleanupThreshold`.
+- 🟡 `warning` — tab count > `2× aiCleanupTargetTabs`, or memory ≥ target + 10%.
+- 🔵 `info` — tab count > target, stale tabs exist, or memory is slightly above target.
 - 🟢 `ok` — everything nominal.
 
-Each suggestion has `action` (button label) and `msg` (explanation). Popup renders as clickable cards that trigger the corresponding action.
+Each suggestion has `action` (button label) and `msg` (explanation). Popup renders clickable cards that trigger the corresponding action and an `Ignore` button. Ignore stores `aiSuggestionsMutedUntil` in settings and suppresses recommendations for 10 minutes.
 
 Popup refresh behavior: `Check`, `AI Clean`, mode changes, holiday-calendar changes, and settings saves all refresh AI Suggestions. A low-frequency 30s timer also refreshes suggestions while the popup stays open.
 
@@ -262,7 +262,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category learned 
 6. Fallback: if there are not enough meaningful `backgroundAgeMs` samples yet, use meaningful `dwellMs` (foreground dwell) as proxy for active-close patterns.
 7. Runtime close time: `min(learned close time × foreground/background importance multiplier, user maximum close-after slider)`. If no learned time exists yet, the category default is capped by the user slider.
 
-**Learned close-time floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive.
+**Learned close-time floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive. Uncategorized `other` floors at 12 hours because unknown pages should be conservative until classification improves.
 
 **Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation.
 

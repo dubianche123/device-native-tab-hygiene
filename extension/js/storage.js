@@ -195,6 +195,7 @@ const DEFAULT_SETTINGS = {
   holidayCalendar: 'none',
   idleSchedule: DEFAULT_IDLE_SCHEDULE,
   testMode: false,
+  aiSuggestionsMutedUntil: 0,
   aiCleanupTargetMemory: 70,
   aiCleanupTargetTabs: 30,
   aiForceCleanupThreshold: 85,

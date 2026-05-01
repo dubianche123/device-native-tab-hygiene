@@ -416,6 +416,13 @@ body {
   border-radius: 6px;
 }
 
+.ai-suggestion__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .ai-suggestion--critical {
   background: rgba(231, 76, 60, 0.12);
   color: #e74c3c;
@@ -436,8 +443,8 @@ body {
   color: #27ae60;
 }
 
-.ai-suggestion__action {
-  margin-left: auto;
+.ai-suggestion__action,
+.ai-suggestion__ignore {
   flex-shrink: 0;
 }
 

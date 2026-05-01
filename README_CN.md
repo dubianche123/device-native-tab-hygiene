@@ -119,9 +119,9 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 - **手动关闭学习**：你在浏览器里直接关掉标签页，或者在插件 Popup 里使用 Close & Log，都会成为本地学习样本。Neural-Janitor 会同时学习前台停留时间和离开前台后的背景时间；自动清理样本只作为上下文记录，避免系统把自己的判断反复强化。
 - **AI Tools 独立分类**：ChatGPT、Claude、Gemini、DeepSeek、Hugging Face、Perplexity、Qwen、Kimi、豆包等 AI 网页会进入单独类别，默认保留 30 天。
 - **节假日感知的闲置预测**：Settings 可以选择日本或中国节假日日历。ML Insights 会把未来 7 天标为 Workday、Weekend 或具体节假日 / 长假区间，例如 Golden Week、国庆假期，并可设置工作日 / 周末假期两组参考睡觉-起床窗口。
-- **AI Cleanup**：插件可以根据内存压力、目标标签页数量、类别优先级、交互次数和闲置时间，自动关闭或标记低重要度标签页。它会保护 AI / 工作类标签页，遵守白名单，也会遵守测试模式。
+- **AI Cleanup**：插件会优先降低标签页数量，再有限处理内存压力，因为 macOS / Chromium 不一定会在关闭标签后立刻释放内存。它会根据类别优先级、交互次数和闲置时间排序，保护 AI / 工作类标签页，遵守白名单，也会遵守测试模式。
 - **MEM / CPU 监控**：Popup 会显示内存压力、CPU 占用，以及类似 `M3 8T` 的简短芯片 / 线程数标记。
-- **AI Suggestions**：插件会给出减少标签页、运行 AI Cleanup、执行检查等建议。点击 Check、AI Clean、切换模式、切换节假日日历、保存设置，以及 Popup 保持打开时，建议都会刷新。
+- **AI Suggestions**：插件会给出减少标签页、运行 AI Cleanup、执行检查等建议，每条建议都可以忽略 10 分钟。点击 Check、AI Clean、切换模式、切换节假日日历、保存设置，以及 Popup 保持打开时，建议都会刷新。
 - **透明 ML 控制台**：Popup 会显示 Native Messaging 连接状态、Model Samples、Closure Samples、Model Readiness、模型准确率、最后本地训练时间、硬件遥测标记、决策置信度 / 启发式估算，以及低功耗推理指示灯。
 - **关闭标签页恢复**：由 Neural-Janitor 关闭的标签页会按类别记录，并可从 Closed Log 恢复。
 

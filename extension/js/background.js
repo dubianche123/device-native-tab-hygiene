@@ -878,12 +878,19 @@ async function aiCleanup() {
   let currentMem = mem.percent;
   let currentCount = tabCount;
   const testMode = settings.testMode === true;
+  const tabPressureActive = tabCount > targetTabs;
+  const memoryOnlyCloseLimit = tabPressureActive ? Number.POSITIVE_INFINITY : 5;
 
   if (testMode) await clearAllTags();
 
   for (const { tabId, entry, backgroundAgeMs } of candidates) {
-    // Stop if both targets are met
-    if (currentMem <= targetMemory && currentCount <= targetTabs) break;
+    // Tab count is the primary control target. Memory pressure often does not
+    // drop immediately after tab closure, so memory-only cleanup is bounded.
+    if (tabPressureActive) {
+      if (currentCount <= targetTabs) break;
+    } else if (currentMem <= targetMemory || closedTabs.length >= memoryOnlyCloseLimit) {
+      break;
+    }
 
     if (testMode) {
       await tagTab(tabId, {
@@ -967,22 +974,55 @@ async function getAISuggestion() {
   const targetMem = settings.aiCleanupTargetMemory || 70;
   const targetTabs = settings.aiCleanupTargetTabs || 30;
   const forceThreshold = settings.aiForceCleanupThreshold || 85;
+  const now = Date.now();
+  const mutedUntil = Number(settings.aiSuggestionsMutedUntil || 0);
+
+  if (mutedUntil > now) {
+    return {
+      suggestions: [],
+      muted: true,
+      mutedUntil,
+      memPercent: mem.percent,
+      tabCount,
+      targetMem,
+      targetTabs,
+      forceThreshold,
+    };
+  }
 
   const suggestions = [];
+
+  // Tab count is the most reliable cleanup target; memory pressure may lag
+  // behind tab closure because Chromium and macOS reclaim memory lazily.
+  if (tabCount > targetTabs * 2) {
+    suggestions.push({
+      level: 'warning',
+      icon: '📑',
+      text: `${tabCount} open tabs — over 2× your target (${targetTabs}). AI Cleanup will prioritize reducing tab count.`,
+      action: 'aiCleanup',
+    });
+  } else if (tabCount > targetTabs) {
+    suggestions.push({
+      level: 'info',
+      icon: '📋',
+      text: `${tabCount} open tabs — above your target (${targetTabs}).`,
+      action: 'aiCleanup',
+    });
+  }
 
   // Memory pressure suggestions
   if (mem.percent >= forceThreshold) {
     suggestions.push({
       level: 'critical',
       icon: '🔴',
-      text: `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%). Run AI Cleanup now.`,
+      text: `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%). Cleanup is bounded because memory may not drop immediately.`,
       action: 'aiCleanup',
     });
   } else if (mem.percent >= targetMem + 10) {
     suggestions.push({
       level: 'warning',
       icon: '🟠',
-      text: `Memory at ${mem.percent}% — well above target (${targetMem}%). Consider AI Cleanup.`,
+      text: `Memory at ${mem.percent}% — above target (${targetMem}%). Reducing tab count may help, but memory can lag.`,
       action: 'aiCleanup',
     });
   } else if (mem.percent >= targetMem) {
@@ -993,27 +1033,10 @@ async function getAISuggestion() {
     });
   }
 
-  // Tab count suggestions
-  if (tabCount > targetTabs * 2) {
-    suggestions.push({
-      level: 'warning',
-      icon: '📑',
-      text: `${tabCount} open tabs — over 2× your target (${targetTabs}). Close some or run AI Cleanup.`,
-      action: 'aiCleanup',
-    });
-  } else if (tabCount > targetTabs) {
-    suggestions.push({
-      level: 'info',
-      icon: '📋',
-      text: `${tabCount} open tabs — above your target (${targetTabs}).`,
-    });
-  }
-
   // Stale tabs suggestion
   const registry = await getTabRegistry();
   const protectedTabs = await getProtectedTabIds();
   const learnedThresholds = await getLearnedThresholds();
-  const now = Date.now();
   let staleCount = 0;
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);

@@ -30,6 +30,7 @@ const MANUAL_TYPES = new Set(['manual_browser_close', 'manual_popup_close']);
 const VALID_TYPES = new Set([...MANUAL_TYPES, 'auto_cleanup']);
 const SHORT_SESSION_FLOOR_MS = 2 * 60 * 1000;
 const IMPORTANT_SESSION_FLOOR_MS = 10 * 60 * 1000;
+const UNCATEGORIZED_SESSION_FLOOR_MS = 12 * 60 * 60 * 1000;
 const IMPORTANT_CATEGORIES = new Set(['ai', 'work', 'email', 'reference', 'finance']);
 
 // ── Storage access ────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ function isManualClosure(type) {
 }
 
 function learnedThresholdFloor(category) {
+  if (category === DEFAULT_CATEGORY.key) return UNCATEGORIZED_SESSION_FLOOR_MS;
   return IMPORTANT_CATEGORIES.has(category) ? IMPORTANT_SESSION_FLOOR_MS : SHORT_SESSION_FLOOR_MS;
 }
 
