@@ -162,7 +162,7 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 ### 4. Core ML 预测器 (Core ML Predictor)
 伴随程序从历史活动中构建一个包含 9 个特征的 `TrainingSample`：星期几、小时、分钟、是否周末、距离上次活跃多久、过去 24 小时活跃事件数、过去 7 天活跃天数、标签页数量、平均停留分钟数。它会训练一个 `MLBoostedTreeClassifier`，并通过 `computeUnits = .all` 加载到 Core ML。
 
-Core ML 可能根据 macOS 调度和模型支持情况使用 Apple Neural Engine、GPU 或 CPU。公开 API 能告诉我们请求了哪些计算单元以及硬件是否可用，但不会暴露每一次推理到底跑在哪个处理器上。因此 UI 会展示 **NPU/GPU 可用性和 CPU fallback 状态**，而不会假装知道系统私有调度器的精确选择。
+Core ML 可能根据 macOS 调度和模型支持情况使用 Apple Neural Engine、GPU 或 CPU。公开 API 能告诉我们请求了哪些计算单元以及硬件是否可用，但不会暴露每一次推理到底跑在哪个处理器上。因此 UI 会展示 **Model / Learning / Fallback 状态**，而不会假装知道系统私有调度器的精确选择。
 
 ### 5. 节假日感知的闲置窗口
 浏览器会为未来 7 个实际日期生成逐日 `holidayLevels`，并通过 Native Messaging 发给 Swift 伴随程序。这样即使今天不是假日，如果下周一是日本或中国假日，周一的预测也会被单独调整。Native host 离线时，浏览器 fallback 也会使用同一套日本 / 中国日历，并明确标记为启发式估算。

@@ -162,7 +162,7 @@ When the extension cannot confidently categorize a URL, it asks the companion ap
 ### 4. Core ML Predictor
 The companion builds a 9-feature `TrainingSample` from historical activity: day of week, hour, minute, weekend flag, minutes since last active, active events in the last 24 hours, active days in the last 7 days, tab count, and average dwell minutes. It trains a `MLBoostedTreeClassifier` and loads it through Core ML with `computeUnits = .all`.
 
-Core ML can use the Apple Neural Engine, GPU, or CPU depending on macOS scheduling and model support. Public APIs expose requested compute units and hardware availability, not the exact processor used for each individual inference, so the UI reports **NPU/GPU eligibility and CPU fallback state** rather than pretending to know the private scheduler's exact choice.
+Core ML can use the Apple Neural Engine, GPU, or CPU depending on macOS scheduling and model support. Public APIs expose requested compute units and hardware availability, not the exact processor used for each individual inference, so the UI reports **Model / Learning / Fallback state** rather than pretending to know the private scheduler's exact choice.
 
 ### 5. Holiday-Aware Idle Windows
 The browser builds a per-day `holidayLevels` payload for the next seven calendar dates and sends it to the companion through Native Messaging. That means a Monday Japanese holiday changes Monday's prediction even if today is a normal workday. If the native host is offline, the browser fallback uses the same Japan / China calendar module and labels the result as a heuristic estimate.

@@ -52,7 +52,7 @@ IPC is serialized in `extension/js/idle-detector.js` with `companionQueue`, so r
 All UI surfaces should use the same marker states from `extension/js/constants.js`:
 
 - `auto`: Core ML Auto can use this device.
-- `active`: known active fallback path, usually browser/native CPU fallback.
+- `active`: known active fallback path, usually browser/native fallback.
 - `standby`: known but not the current explicit execution path.
 - `unavailable`: hardware/API unavailable.
 - `error`: telemetry link is offline or inconsistent.

@@ -223,10 +223,10 @@ function sendMessage(msg) {
 
 function shortRuntimeLabel(status = {}) {
   if (status.runtime === 'disabled') return 'OFF';
-  if (status.runtime === 'coreml') return 'ML';
-  if (status.runtime === 'lookup') return 'Lookup';
-  if (status.runtime === 'heuristic') return 'Heur';
-  return status.connected ? 'ML' : 'Heur';
+  if (status.runtime === 'coreml') return 'Model';
+  if (status.runtime === 'lookup') return 'Learning';
+  if (status.runtime === 'heuristic') return 'Fallback';
+  return status.connected ? 'Model' : 'Fallback';
 }
 
 function estimatePackagePower(cpu = {}) {
@@ -292,7 +292,7 @@ function telemetryDevices(status = {}) {
       key: 'cpu',
       label: 'CPU',
       state: HARDWARE_MARKER_STATES.ACTIVE,
-      detail: 'Browser heuristic',
+      detail: 'Fallback estimate',
     },
   ];
 }
@@ -310,7 +310,7 @@ function renderMLStatus(status = {}) {
     `).join('')}
   `;
 
-  const runtime = status.runtimeLabel || (status.connected ? 'Local ML' : 'Heuristic fallback');
+  const runtime = status.runtimeLabel || (status.connected ? 'Model' : 'Fallback');
   const engine = status.engineCodename ? `engine=${status.engineCodename}` : '';
   const compute = status.computeUnits ? `compute=${status.computeUnits}` : '';
   const telemetry = status.telemetryStatus || status.hardwareTelemetry?.status || 'unknown';
@@ -325,11 +325,11 @@ function renderMLStatus(status = {}) {
 function acceleratorLabel(status = {}) {
   const devices = telemetryDevices(status);
   const npu = devices.find(device => device.key === 'npu');
-  if (status.runtime === 'coreml' && npu?.available) return 'NPU-eligible';
-  if (status.runtime === 'coreml') return 'Core ML';
-  if (status.runtime === 'lookup') return 'CPU Lookup';
-  if (status.runtime === 'disabled') return 'ML Off';
-  return 'CPU Heuristic';
+  if (status.runtime === 'coreml' && npu?.available) return 'Model';
+  if (status.runtime === 'coreml') return 'Model';
+  if (status.runtime === 'lookup') return 'Learning';
+  if (status.runtime === 'disabled') return 'Off';
+  return 'Fallback';
 }
 
 function decisionText(status = {}, confidence = 0) {
@@ -338,19 +338,28 @@ function decisionText(status = {}, confidence = 0) {
     return `${acceleratorLabel(status)} Predicts Idle Confidence: ${formatted}`;
   }
   if (status.runtime === 'lookup') {
-    return `CPU Lookup Estimates Idle Likelihood: ${formatted}`;
+    return `Learning Estimates Idle Likelihood: ${formatted}`;
   }
   if (status.runtime === 'disabled') {
     return 'ML Off: no idle estimate';
   }
-  return `CPU Heuristic Idle Estimate: ${formatted}`;
+  return `Fallback Idle Estimate: ${formatted}`;
 }
 
 function retrainRuntimeLabel(status = {}) {
   const runtime = status.lastRetrainRuntime || status.runtimeLabel || 'local model';
   const devices = telemetryDevices(status);
   const npu = devices.find(device => device.key === 'npu');
-  if (runtime === 'Core ML Auto' && npu?.available) return 'Core ML Auto (NPU eligible)';
+  const normalized = String(runtime).toLowerCase();
+  if (normalized.includes('model') || normalized.includes('core ml')) {
+    return npu?.available ? 'Model (NPU eligible)' : 'Model';
+  }
+  if (normalized.includes('learning') || normalized.includes('lookup')) {
+    return 'Learning';
+  }
+  if (normalized.includes('fallback') || normalized.includes('heuristic')) {
+    return 'Fallback';
+  }
   return runtime;
 }
 
@@ -365,25 +374,25 @@ function computePathExplanation(status = {}) {
     const eligible = [
       npu?.available ? 'NPU eligible' : null,
       gpu?.available ? 'GPU eligible' : null,
-      cpu?.available ? 'CPU fallback ready' : null,
+      cpu?.available ? 'Fallback ready' : null,
     ].filter(Boolean).join(', ');
-    return `Core ML Auto (${eligible || 'Apple runtime managed'})`;
+    return `Model (${eligible || 'Apple runtime managed'})`;
   }
   if (runtime === 'lookup') {
-    return `CPU lookup fallback (${status.trainingSamples || 0} local samples)`;
+    return `Learning (${status.trainingSamples || 0} local samples)`;
   }
   if (runtime === 'disabled') {
     return 'Companion disabled in settings';
   }
   if (status.connected === false) {
-    return `Browser CPU heuristic; NPU telemetry ${status.disconnectReason || 'offline'}`;
+    return `Fallback; NPU telemetry ${status.disconnectReason || 'offline'}`;
   }
   const count = status.activityCount || status.trainingSamples || 0;
   const min = status.minimumTrainingSamples || 100;
   if (count >= min && !status.modelLoaded && status.runtime !== 'lookup') {
-    return 'CPU Heuristic';
+    return 'Learning';
   }
-  return `CPU heuristic (${count}/${min} samples before Core ML)`;
+  return `Learning (${count}/${min} samples before Model)`;
 }
 
 function renderConfidenceCurve(curve = []) {

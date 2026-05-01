@@ -282,7 +282,7 @@ final class IdlePredictor {
             trainingSamples: samples.count,
             modelAccuracy: evaluateAccuracy(on: samples),
             lastRetrainedAt: lastTrainingCompletedAt?.timeIntervalSince1970,
-            lastRetrainRuntime: model != nil ? "Core ML Auto" : "CPU Lookup"
+            lastRetrainRuntime: model != nil ? "Model" : "Learning"
         )
         saveMetrics()
         writeLog("Idle predictor trained via Create ML and loaded through Core ML")
@@ -309,7 +309,8 @@ final class IdlePredictor {
         }
         let runtimeNote = usingCoreML
             ? "Core ML selects the exact ANE/GPU/CPU target internally; public APIs expose availability and requested compute units, not the per-inference processor."
-            : "Core ML model is not loaded yet, so predictions use a local CPU fallback while more browser activity is collected and retraining continues."
+            : "Core ML model is not loaded yet, so predictions use a local fallback while more browser activity is collected and retraining continues."
+        let runtimeLabel = usingCoreML ? "Model" : (!lookup.isEmpty ? "Learning" : "Fallback")
         var payload: [String: Any] = [
             "type": "health",
             "protocolVersion": ipcProtocolVersion,
@@ -319,7 +320,7 @@ final class IdlePredictor {
             "modelMode": mode,
             "modelLoaded": usingCoreML,
             "runtime": (model != nil ? "coreml" : (!lookup.isEmpty ? "lookup" : "heuristic")),
-            "runtimeLabel": (model != nil ? "Core ML Auto" : (!lookup.isEmpty ? "CPU Lookup" : "CPU Heuristic")),
+            "runtimeLabel": runtimeLabel,
             "computeUnits": usingCoreML ? "all" : "cpu",
             "activityCount": activityCount,
             "trainingSamples": trainingSamples,
@@ -412,7 +413,7 @@ final class IdlePredictor {
             if let artifactDate = latestArtifactModifiedAt() {
                 lastTrainingCompletedAt = artifactDate
                 metrics.lastRetrainedAt = artifactDate.timeIntervalSince1970
-                metrics.lastRetrainRuntime = model != nil ? "Core ML Auto" : (!lookup.isEmpty ? "CPU Lookup" : "not-trained")
+                metrics.lastRetrainRuntime = model != nil ? "Model" : (!lookup.isEmpty ? "Learning" : "Fallback")
             }
             return
         }
@@ -546,7 +547,7 @@ final class IdlePredictor {
 
         metrics.trainingSamples = samples.count
         metrics.modelAccuracy = evaluateAccuracy(on: samples)
-        metrics.lastRetrainRuntime = model != nil ? "Core ML Auto" : (!lookup.isEmpty ? "CPU Lookup" : "CPU Heuristic")
+        metrics.lastRetrainRuntime = model != nil ? "Model" : (!lookup.isEmpty ? "Learning" : "Fallback")
         if metrics.lastRetrainedAt == nil {
             metrics.lastRetrainedAt = latestArtifactModifiedAt()?.timeIntervalSince1970
             if let retrainedAt = metrics.lastRetrainedAt {
