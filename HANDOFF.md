@@ -82,6 +82,8 @@ NPU disconnect behavior:
 - Swift companion: `companion/NeuralJanitorCompanion/Sources/main.swift`
 - Install script: `scripts/install.sh`
 - Uninstall script: `scripts/uninstall.sh`
+- Model export script: `scripts/export_model_bundle.sh`
+- Model import script: `scripts/import_model_bundle.sh`
 - Bootstrap trainer: `scripts/train_model.py`
 
 ## Validation Commands
@@ -99,6 +101,8 @@ node --check extension/js/storage.js
 python3 -B -m py_compile scripts/train_model.py
 bash -n scripts/install.sh
 bash -n scripts/uninstall.sh
+bash -n scripts/export_model_bundle.sh
+bash -n scripts/import_model_bundle.sh
 swift build -c release --package-path companion/NeuralJanitorCompanion
 ```
 
@@ -207,6 +211,7 @@ Training samples: the popup displays real `trainingSamples` from the companion. 
 - Storage: `extension/js/storage.js` (new settings keys, tagged-tabs functions)
 - Background: `extension/js/background.js` (test mode, memory, AI cleanup, AI suggestions, force-trigger)
 - Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings)
+- Model transfer helpers: `scripts/export_model_bundle.sh`, `scripts/import_model_bundle.sh`
 
 ## Validation Commands (additions)
 
@@ -221,6 +226,8 @@ All 7 JS files pass `node --check`. CSS braces balanced (139/139). Manifest JSON
 - Browser extension install is still Load Unpacked from `extension/`.
 - Full local ML requires rerunning `./scripts/install.sh <extension-id>` after the native host id rename.
 - Chrome/Edge cannot silently install a Native Messaging host from an extension package; a script, signed app, or pkg installer is still required for companion setup.
+- Cross-Mac model transfer is snapshot-based. Use `./scripts/export_model_bundle.sh --output ~/Desktop` on the source Mac and `./scripts/import_model_bundle.sh <bundle.tar.gz>` on the target Mac after installing the extension/companion. Do not live-sync `~/Library/Application Support/Neural-Janitor/` through iCloud while the companion is running; `activity_events.json` is hot-written and can conflict.
+- Transfer bundle defaults to model artifacts only: `TabIdlePredictor.mlmodel`, `idle_lookup.json`, and `model_metrics.json`. Raw `activity_events.json` requires `--with-events` on export and import.
 - Core ML public APIs expose requested compute units and hardware availability, but not the exact per-inference processor. Do not claim exact ANE usage for a single inference.
 - `chrome.system.memory` permission added to manifest for memory pressure monitoring.
 - DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.

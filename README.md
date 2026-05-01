@@ -219,6 +219,79 @@ Whenever the Swift companion or Native Messaging host id changes, rerun:
 
 Then reload the browser extension.
 
+## Moving The Local Model Between Macs
+
+Neural-Janitor keeps its learned artifacts in:
+
+```text
+~/Library/Application Support/Neural-Janitor/
+```
+
+For sharing a learned model with another Mac, do not live-sync that whole folder through iCloud. The companion writes activity data while the browser is running, so direct folder sync can create conflicts. Use a snapshot bundle instead.
+
+### What Gets Moved
+
+The export script packages the portable model artifacts:
+
+| File | Purpose |
+|------|---------|
+| `TabIdlePredictor.mlmodel` | The Create ML / Core ML idle predictor when enough samples exist. |
+| `idle_lookup.json` | CPU lookup fallback used before or alongside the Core ML artifact. |
+| `model_metrics.json` | Training sample count, accuracy, retrain time, and runtime metadata. |
+| `activity_events.json` | Optional raw training history. Exported only with `--with-events`. |
+
+The bundle also includes `MANIFEST.md` and `SHA256SUMS` so the target Mac can verify what it received.
+
+### Export From The Source Mac
+
+Recommended model-only export:
+
+```bash
+./scripts/export_model_bundle.sh --output ~/Desktop
+```
+
+This creates a file like:
+
+```text
+~/Desktop/neural-janitor-model-bundle-20260501-153000.tar.gz
+```
+
+If you intentionally want to move raw browsing activity history too:
+
+```bash
+./scripts/export_model_bundle.sh --with-events --output ~/Desktop
+```
+
+Move the `.tar.gz` by AirDrop, iCloud Drive, USB drive, or any private file-transfer method.
+
+### Import On The Target Mac
+
+First install Neural-Janitor normally on the target Mac:
+
+```bash
+./scripts/install.sh YOUR_EXTENSION_ID
+```
+
+Then import the bundle:
+
+```bash
+./scripts/import_model_bundle.sh ~/Desktop/neural-janitor-model-bundle-20260501-153000.tar.gz
+```
+
+If the bundle contains `activity_events.json` and you intentionally want to restore that raw history:
+
+```bash
+./scripts/import_model_bundle.sh --with-events ~/Desktop/neural-janitor-model-bundle-20260501-153000.tar.gz
+```
+
+The import script verifies checksums, backs up existing local artifacts under:
+
+```text
+~/Library/Application Support/Neural-Janitor/backups/
+```
+
+After importing, restart Chrome / Edge or reload the extension so the companion reloads the model. Open the popup and check **Link: Connected**, **Training Samples**, and the ML runtime label.
+
 ## Using The Popup
 
 - **Check**: Runs a stale-tab check immediately. In Test mode it tags tabs; in Deploy mode it closes eligible tabs.
@@ -242,6 +315,8 @@ node --check extension/js/storage.js
 python3 -B -m py_compile scripts/train_model.py
 bash -n scripts/install.sh
 bash -n scripts/uninstall.sh
+bash -n scripts/export_model_bundle.sh
+bash -n scripts/import_model_bundle.sh
 swift build -c release --package-path companion/NeuralJanitorCompanion
 ```
 

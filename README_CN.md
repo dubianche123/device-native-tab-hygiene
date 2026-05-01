@@ -219,6 +219,79 @@ chmod +x scripts/install.sh
 
 然后在 Chrome / Edge 扩展页 reload 插件。
 
+## 在多台 Mac 之间迁移本地模型
+
+Neural-Janitor 学到的本地模型文件默认保存在：
+
+```text
+~/Library/Application Support/Neural-Janitor/
+```
+
+如果你想让另一台 Mac 使用同一套模型，不建议把整个目录直接放进 iCloud 实时同步。伴随程序运行时会持续写入活动数据，直接同步热目录容易出现冲突。更稳妥的方式是导出一个 snapshot 包，再在另一台 Mac 上导入。
+
+### 会迁移哪些文件
+
+导出脚本会打包可迁移的模型产物：
+
+| 文件 | 用途 |
+|------|------|
+| `TabIdlePredictor.mlmodel` | 样本足够后生成的 Create ML / Core ML 闲置预测模型。 |
+| `idle_lookup.json` | Core ML 模型尚未生成或不可用时的 CPU lookup fallback。 |
+| `model_metrics.json` | 训练样本数、准确率、最后训练时间和运行时信息。 |
+| `activity_events.json` | 可选的原始训练历史。只有加 `--with-events` 才会导出。 |
+
+导出的包还会包含 `MANIFEST.md` 和 `SHA256SUMS`，目标 Mac 导入时会做校验。
+
+### 在源 Mac 导出
+
+推荐只导出模型产物：
+
+```bash
+./scripts/export_model_bundle.sh --output ~/Desktop
+```
+
+它会生成类似这样的文件：
+
+```text
+~/Desktop/neural-janitor-model-bundle-20260501-153000.tar.gz
+```
+
+如果你明确想连原始浏览活动历史一起迁移：
+
+```bash
+./scripts/export_model_bundle.sh --with-events --output ~/Desktop
+```
+
+然后用 AirDrop、iCloud Drive、U 盘或其他私密文件传输方式，把这个 `.tar.gz` 移到目标 Mac。
+
+### 在目标 Mac 导入
+
+先在目标 Mac 正常安装 Neural-Janitor：
+
+```bash
+./scripts/install.sh 你的_EXTENSION_ID
+```
+
+然后导入模型包：
+
+```bash
+./scripts/import_model_bundle.sh ~/Desktop/neural-janitor-model-bundle-20260501-153000.tar.gz
+```
+
+如果这个包里包含 `activity_events.json`，并且你确实想恢复原始训练历史：
+
+```bash
+./scripts/import_model_bundle.sh --with-events ~/Desktop/neural-janitor-model-bundle-20260501-153000.tar.gz
+```
+
+导入脚本会校验 checksum，并把目标 Mac 上已有的本地模型备份到：
+
+```text
+~/Library/Application Support/Neural-Janitor/backups/
+```
+
+导入后重启 Chrome / Edge，或者在扩展管理页 reload 插件，让 companion 重新加载模型。随后打开插件 Popup，确认 **Link: Connected**、**Training Samples** 和 ML runtime label 正常显示。
+
 ## Popup 使用方式
 
 - **Check**：立即检查过期标签页。测试模式下只打标，部署模式下会关闭符合条件的标签页。
@@ -242,6 +315,8 @@ node --check extension/js/storage.js
 python3 -B -m py_compile scripts/train_model.py
 bash -n scripts/install.sh
 bash -n scripts/uninstall.sh
+bash -n scripts/export_model_bundle.sh
+bash -n scripts/import_model_bundle.sh
 swift build -c release --package-path companion/NeuralJanitorCompanion
 ```
 
