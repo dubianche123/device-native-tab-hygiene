@@ -7,9 +7,9 @@
 
 # Neural-Janitor
 
-### Edge-Accelerated Tab Hygiene powered by Apple Core ML.
+### Edge-Accelerated Tab Hygiene powered by Apple Core ML
 
-Neural-Janitor is an intelligent Chrome/Edge extension that learns when to close your tabs. Unlike static timers, it uses a local Swift companion and Core ML to predict your idle state and learn your personal retention habits—all entirely on-device.
+Neural-Janitor is an intelligent Chrome / Edge extension that learns when to close your tabs. Instead of static timers, it uses a local Swift companion and Core ML to predict idle windows and learn retention thresholds from your browsing habits, all on-device.
 
 ---
 
@@ -17,9 +17,9 @@ Neural-Janitor is an intelligent Chrome/Edge extension that learns when to close
 
 Neural-Janitor moves beyond simple timers by combining three local signals:
 
-1.  **Manual Learning**: Learns your preferred "close-after" time for each category (AI, Work, Finance, etc.) based on your actual manual closure behavior.
-2.  **Context Multiplier**: A Core ML model predicts your machine's idle windows. When you're likely away, it nudges cleanup to be more aggressive.
-3.  **Tab Importance**: Scores tabs based on foreground dwell time, interaction count, and category priority (AI tools stay longer; Social fades fast).
+1.  **Manual Learning**: Learns retention time per category from your real manual closes.
+2.  **Context Multipliers**: A Core ML model predicts idle windows. When you're likely away, cleanup becomes more assertive.
+3.  **Tab Importance**: Scores tabs by foreground dwell, interaction count, and category priority.
 
 <details>
 <summary><b>View System Architecture (C4 Diagram)</b></summary>
@@ -38,7 +38,7 @@ flowchart TB
     direction LR
     collector["📥 Activity Collector"]
     classifier["🔤 Page Classifier"]
-    predictor["🧠 The Chronos Engine"]
+    predictor["🧠 Chronos Engine"]
   end
 
   coreml[["⚡ Apple Core ML Runtime"]]
@@ -57,42 +57,42 @@ flowchart TB
 
 ## ✨ Key Features
 
-- **Personalized Learning**: Automatically adapts closure thresholds per category and per domain (e.g., your specific broker vs. general finance).
-- **AI-Driven Cleanup**: One-click "AI Clean" to reclaim memory and reduce tab count while protecting important work/AI sessions.
-- **Smart Policies**:
-    - **Whitelist**: Never close specific domains.
-    - **Timed Blacklist**: Set fixed HH:MM limits for distracting sites (e.g., Social Media = 1h).
-    - **Holiday Aware**: Supports Japan/China calendars to adapt behavior during weekends and holidays.
-- **Privacy First**: 100% local. No cloud telemetry, no remote scripts, no data leaks.
-- **Telemetry UI**: Real-time MEM/CPU monitoring and transparent "Closure Learning" statistics.
+-   **Personalized Learning**: Automatically adapts closure thresholds for each category and even specific root domains (e.g., your specific broker vs general finance).
+-   **AI-Powered Cleanup**: One-click "AI Clean" to reclaim memory and reduce tab count while protecting critical Work and AI sessions.
+-   **Smart Governance**:
+    -   **Whitelist**: Domains that are never closed.
+    -   **Timed Blacklist**: Set fixed numeric hour/minute limits for distracting sites (e.g., social media). These are excluded from learning.
+    -   **Holiday Awareness**: Integrated JP/CN calendars to adjust behavior for weekends and named holidays.
+-   **Privacy First**: 100% local. No cloud telemetry, no remote scripts, no data leaks.
+-   **Telemetry Dashboard**: Real-time MEM/CPU monitoring and transparent closure-learning stats in the popup.
 
 ---
 
-## 🛠️ Installation
+## 🛠️ Setup Instructions
 
-1.  **Load Extension**:
-    - Open `chrome://extensions`, enable **Developer Mode**.
-    - Click **Load unpacked** and select the `extension/` folder.
-    - Copy the **Extension ID**.
+1.  **Load the Extension**:
+    -   Open `chrome://extensions`, enable **Developer Mode**.
+    -   Click **Load unpacked** and select the `extension/` folder.
+    -   Copy the **Extension ID**.
 
-2.  **Link Companion**:
+2.  **Link the Companion**:
     ```bash
     chmod +x scripts/install.sh
     ./scripts/install.sh YOUR_EXTENSION_ID
     ```
 
-3.  **Reload**: Reload the extension in the browser. The companion will start automatically.
+3.  **Reload**: Refresh the extension in your browser; the companion starts automatically.
 
 ---
 
 ## 📂 Data & Portability
 
-Learned models and logs are stored at:
+Models and logs are stored in:
 `~/Library/Application Support/Neural-Janitor/`
 
-**Export/Import Model:**
+**Export/Import Models:**
 ```bash
-# Export model only
+# Export learned artifacts
 ./scripts/export_model_bundle.sh --output ~/Desktop
 
 # Import on another Mac
@@ -103,7 +103,7 @@ Learned models and logs are stored at:
 
 ## 🏗️ Development
 
-Verify JS syntax and build:
+Verify JS syntax and build the companion:
 ```bash
 # Check extension logic
 node --check extension/js/background.js
@@ -111,4 +111,4 @@ node --check extension/js/background.js
 swift build -c release --package-path companion/NeuralJanitorCompanion
 ```
 
-<p align="center"><sub>Neural-Janitor — The Chronos Engine — Local Intelligence for a Cleaner Web.</sub></p>
+<p align="center"><sub>Neural-Janitor — Chronos Engine — Local intelligence for a cleaner web.</sub></p>
