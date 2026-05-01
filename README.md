@@ -1,18 +1,29 @@
-# Neural-Janitor
+<div align="right">
+  <sub>
+    <strong>English</strong> |
+    <a href="README_CN.md">中文</a>
+  </sub>
+</div>
 
-Neural-Janitor (神经门卫) is a Chrome/Edge extension that **learns when you're away from your Mac** using Apple's Core ML on the Neural Engine (NPU), and automatically closes stale browser tabs after category-specific idle thresholds.
+# Neural-Janitor: Edge-Accelerated Tab Hygiene
 
-Kernel codename: **The Chronos Engine**.
+## A local, NPU-powered browser automation engine
 
-中文说明见 [README.zh-CN.md](README.zh-CN.md).
+**Version**: 1.0 MVP  
+**Author**: Leo  
+**Date**: May 2026  
 
-## Why?
+Neural-Janitor is an intelligent browser tab management extension wrapped around Apple's local Machine Learning stack. The visible product is a smart tab closer, but the core subject is a method: how to capture browser behavioral telemetry, compress it locally, and predict user idle states using the Neural Engine (NPU) without ever touching the cloud.
 
-You leave 47 tabs open. Three days later, your MacBook sounds like a jet engine. Neural-Janitor watches your patterns, knows when you're sleeping or away, and quietly closes tabs you haven't touched — categorising and recording them so nothing is lost.
+The project is built around a simple engineering principle:
 
-## How It Works
+**Tab management should learn from the user, but the learning must happen entirely on-device and at near-zero power cost.**
 
-```
+Underneath the browser extension, the system records lightweight behavioral signals, and the macOS Swift companion app compresses them into training samples. Core ML then evaluates these samples locally on the Apple Neural Engine.
+
+## Runtime Dataflow
+
+```text
 ┌─────────────────────────────────────────────────────────┐
 │  Chrome / Edge Extension (Manifest V3)                  │
 │                                                         │
@@ -32,8 +43,8 @@ You leave 47 tabs open. Three days later, your MacBook sounds like a jet engine.
 │  macOS Companion App (Swift)                            │
 │                                                         │
 │  ┌──────────────────────┐  ┌─────────────────────────┐ │
-│  │ Activity Collector   │→ │ The Chronos Engine      │ │
-│  │ (idle + tab context) │  │ (runs on ANE / NPU)     │ │
+│  │ Activity Collector   │→ │ Core ML Predictor       │ │
+│  │ (timestamps, state)  │  │ (runs on ANE / NPU)     │ │
 │  └──────────────────────┘  └─────────────────────────┘ │
 │                                    ↓                    │
 │                           Idle window predictions       │
@@ -41,212 +52,92 @@ You leave 47 tabs open. Three days later, your MacBook sounds like a jet engine.
 └─────────────────────────────────────────────────────────┘
 ```
 
+This diagram separates the two execution contexts:
+- **Browser Context**: Manifest V3 extension tracking tab focus, interaction, and content category.
+- **Native Context**: Swift companion app handling model training, prediction, and local NLP classification.
+
+## Why This Exists
+
+Many modern browser tab managers rely on simple hardcoded timers (e.g., "close tabs after 3 days"). This is predictable but fundamentally flawed: a user might be actively using their computer but just not that specific tab, or they might be on a two-week vacation.
+
+Neural-Janitor uses a narrower but smarter model role. It builds a `MLBoostedTreeClassifier` to predict when the user is actually away from the Mac. It only cleans tabs during predicted prolonged idle windows, ensuring you never return to a suddenly missing workspace.
+
+| Problem | Traditional Tab Closers | The Neural-Janitor Pattern |
+|:--|:--|:--|
+| **When to close?** | Hardcoded static timer (e.g., 7 days). | Dynamic timer gated by Core ML idle prediction. |
+| **Categorization** | Simple URL domain matching. | On-device NLP via Apple `NaturalLanguage` framework. |
+| **Resource Cost** | Constant JavaScript polling in background. | Event-driven background worker + NPU-accelerated inference. |
+| **Privacy** | Often requires syncing data to the cloud. | 100% local. Zero telemetry leaves the device. |
+
 ## Category Timeout Rules
+
+Tabs are assigned an idle threshold based on their category. The companion app handles the categorization using local keyword heuristics and Natural Language tokenization.
 
 | Category | Max Idle Time | Rationale |
 |----------|--------------|-----------|
-| **NSFW** | **12 hours** | Opened once, walked away — close ASAP |
-| Social Media | 3 days | FOMO fades fast |
+| **NSFW** | **12 hours** | Opened once, walked away — close ASAP. Does not wait for idle window. |
+| Social Media | 3 days | FOMO fades fast. |
 | Entertainment | 5 days | Netflix tab from Tuesday? Gone. |
-| News | 5 days | Stale news is no news |
-| Shopping | 7 days | Cart abandonment, but for tabs |
-| Other | 7 days | Default for uncategorised URLs |
-| Reference | 10 days | Stack Overflow answers age gracefully |
-| Work & Productivity | 14 days | PRs and Jira tickets need time |
-| Email & Communication | 14 days | Slack/Gmail may need session continuity |
-| **Finance & Banking** | **14 days** | Banking sessions are precious but still sensitive |
-| **AI Tools** | **30 days** | Long-running ChatGPT, Claude, Gemini, DeepSeek, Hugging Face, etc. sessions |
+| News | 5 days | Stale news is no news. |
+| Shopping | 7 days | Cart abandonment, but for tabs. |
+| Other | 7 days | Default for uncategorized URLs. |
+| Reference | 10 days | Stack Overflow answers age gracefully. |
+| Work & Productivity | 14 days | PRs and Jira tickets need time. |
+| Email & Communication | 14 days | Slack/Gmail may need session continuity. |
+| **Finance & Banking** | **30 days** | Banking sessions are precious but not immortal. |
 
-All thresholds are customisable in the extension popup settings. The popup also lets you close a tracked tab directly; those manual closes are written to the same Closed Log as automatic cleanups.
+## Architecture
 
-The popup status area also shows the local ML runtime. `Link: Connected` confirms Native Messaging, the training progress shows local sample maturity and measured training accuracy when available, and the decision panel shows the current idle confidence plus a short confidence curve. `ML` means the native companion is responding; `CPU` means lookup/heuristic fallback; `NPU`, `GPU`, and `CPU` chips use one shared telemetry marker set across the popup: `AUTO`, `ACTIVE`, `STANDBY`, `UNAVAILABLE`, and `ERROR`. If Native Messaging drops, NPU/GPU markers intentionally move to `ERROR` and CPU becomes the browser heuristic fallback. The green Low Power light is a visualisation based on recent local inference activity, not a direct wattage reading.
+The system is split into two deployable artifacts:
 
-## Quick Start
+1. **Manifest V3 Extension**: Handles browser tabs, injects content scripts for interaction tracking, manages the closed tab local registry, and communicates with the companion app via Native Messaging.
+2. **Swift Companion App**: An invisible macOS daemon that aggregates the behavioral data, trains the local ML model, and serves predictions and page classifications.
 
-### Prerequisites
+### 1. Tab Interaction Tracker
+Tracks `openedAt`, `lastVisited`, `dwellMs` (cumulative foreground time), and `interactions`. When a tab is closed, these metrics are preserved in a `chrome.sessions` bound log so it can be restored exactly as it was.
 
-- macOS 13+ (Ventura or later)
-- Xcode Command Line Tools (`xcode-select --install`) to build locally, or a prebuilt `NeuralJanitorCompanion` binary
-- Chrome 88+ or Edge 88+
+### 2. Local Page Classifier
+When the extension cannot confidently categorize a URL, it asks the companion app. The companion uses the Apple `NaturalLanguage` framework to tokenize the page title, description, and content, scoring them against a weighted taxonomy.
 
-### 1. Load the Extension
+### 3. Core ML Predictor
+The companion builds a 9-feature `TrainingSample` from historical activity (day of week, time, dwell averages, tab count, weekend flags, etc.). It continuously trains a `MLBoostedTreeClassifier`. By compiling to Core ML, macOS automatically schedules the inference workload onto the Apple Neural Engine (ANE) on Apple Silicon, drawing negligible power (milliwatts).
 
-1. Open `chrome://extensions` (or `edge://extensions`)
-2. Enable **Developer mode** (top right)
-3. Click **Load unpacked**
-4. Select the `Neural-Janitor/extension` directory
-5. Copy the extension ID shown on the card
+## Security And Privacy
 
-### 2. Build & Install the Companion
+- **No Cloud Analytics**: All activity logs, ML models, and tab registries stay entirely on `~/Library/Application Support/Mimo/` and the extension's local storage.
+- **Zero Tracker Injections**: Does not inject remote scripts or tracking pixels.
+- **Local Model Only**: The Core ML model is trained exclusively on your machine, using your data.
 
+## Transferable Pattern
+
+The useful pattern is not just tab closing. It is:
+**browser telemetry + local Swift companion + NPU-accelerated ML inference**
+
+This can transfer to:
+- **Local Ad Blockers**: Train a model on your browsing habits to pre-emptively block dynamic tracking patterns.
+- **Focus Agents**: Block distracting sites automatically during predicted deep-work periods.
+- **Content Summarizers**: Offload heavy DOM parsing and summarization to native Swift rather than keeping V8 busy.
+
+## Setup Instructions
+
+### 1. Build the Companion
 ```bash
-cd Neural-Janitor
+cd Mimo
 chmod +x scripts/install.sh
-./scripts/install.sh <extension-id>
+./scripts/install.sh
 ```
 
-This will:
-- Build the Swift companion app in release mode
-- Install it to `~/.local/bin/NeuralJanitorCompanion`
-- Register it as a Native Messaging host for Chrome & Edge
+### 2. Load the Extension
+Load the `Mimo/extension` folder as an unpacked extension in Chrome/Edge. Copy the Extension ID.
 
-If you already have a prebuilt companion binary, you can skip the local Swift build:
-
-```bash
-NEURAL_JANITOR_COMPANION_BINARY=/path/to/NeuralJanitorCompanion ./scripts/install.sh YOUR_EXTENSION_ID
-```
-
-### 3. Restart the Browser
-
-The companion starts automatically when the extension connects.
-5. Copy the **extension ID** shown on the card
-
-### 3. Link Extension ↔ Companion
-
-Either rerun the installer with your extension ID:
-
+### 3. Link Extension
 ```bash
 ./scripts/install.sh YOUR_EXTENSION_ID
 ```
+Restart your browser. The companion will automatically start.
 
-Or edit the Native Messaging manifest:
+## Conclusion
 
-```bash
-# Chrome
-vim ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.neuraljanitor.companion.json
+Neural-Janitor tests an architectural stance: we don't need cloud LLMs for every intelligent feature. By combining Manifest V3's event-driven architecture with macOS's native ML capabilities, we can achieve context-aware automation that is private, performant, and deeply integrated into the operating system.
 
-# Edge
-vim ~/Library/Application\ Support/Microsoft\ Edge/NativeMessagingHosts/com.neuraljanitor.companion.json
-```
-
-Replace `REPLACE_WITH_EXTENSION_ID` with your actual extension ID. Chrome and Edge both use the `chrome-extension://<id>/` origin format for Native Messaging.
-
-### 4. Restart the Browser
-
-The companion app starts automatically when the extension connects. You'll see activity in the extension popup's status bar.
-
-### 5. (Optional) Bootstrap the ML Model
-
-If you don't want to wait for the model to learn from scratch:
-
-```bash
-python3 scripts/train_model.py
-```
-
-This generates synthetic activity events and a fallback idle lookup based on typical human sleep/work schedules. The companion app will refine it over time with your actual activity data.
-
-## Sharing / Distribution Notes
-
-The browser extension can be loaded directly from `Neural-Janitor/extension` or packaged for the Chrome Web Store / Edge Add-ons store. The Apple ML companion is different: Chrome and Edge do not allow an extension package to install a Native Messaging host by itself. That native host must be installed separately by the user, by a signed macOS app, or by an installer package.
-
-Practical distribution options:
-
-- Extension-only mode: easiest for friends; uses browser idle signals and fallback predictions, but not Apple Core ML.
-- Extension + install script: current developer-friendly path.
-- Extension + signed macOS companion app/pkg: best polished path for public sharing.
-- Prebuilt companion binary: avoids requiring friends to install Xcode/Swift, using `NEURAL_JANITOR_COMPANION_BINARY=/path/to/NeuralJanitorCompanion ./scripts/install.sh EXTENSION_ID`.
-
-## Project Structure
-
-```
-Neural-Janitor/
-├── extension/                    # Chrome/Edge extension
-│   ├── manifest.json            # Manifest V3
-│   ├── popup.html               # Extension popup UI
-│   ├── css/popup.css            # Styles
-│   ├── js/
-│   │   ├── background.js        # Service worker (main logic)
-│   │   ├── constants.js         # Categories, thresholds, keys
-│   │   ├── storage.js           # chrome.storage.local wrappers
-│   │   ├── categorizer.js       # URL → category classifier
-│   │   ├── idle-detector.js     # Native Messaging client
-│   │   ├── content.js           # Content script (activity ping)
-│   │   └── popup.js             # Popup UI controller
-│   └── icons/                   # Extension icons
-├── companion/
-│   └── NeuralJanitorCompanion/
-│       ├── Package.swift        # Swift Package Manager
-│       ├── Sources/main.swift   # Native Messaging host + Core ML
-│       └── Info.plist
-└── scripts/
-    ├── install.sh               # Build + register
-    ├── uninstall.sh             # Clean removal
-    └── train_model.py           # Bootstrap ML model
-```
-
-## ML / NPU Details
-
-The idle prediction model is trained locally with **Create ML** and loaded with **Core ML**, which automatically dispatches inference to:
-
-| Hardware | Backend | Power Draw |
-|----------|---------|------------|
-| Apple Silicon (M1/M2/M3/M4) | **ANE (Neural Engine)** | ~mW |
-| Apple Silicon (fallback) | GPU | ~100mW |
-| Intel Mac | CPU | ~1W |
-
-The model is a boosted-tree tabular classifier:
-- **Input**: day-of-week, hour, minute, weekend flag, minutes since last active event, active events in the last 24h, active days in the last 7d, tab count, and average dwell minutes
-- **Output**: probability that the user is idle
-- **Training**: Create ML boosted-tree classifier on browser activity + Chrome idle/locked events
-- **Retraining**: automatic, daily, from accumulated activity data
-
-If there is not enough training data yet, Neural-Janitor uses a local lookup/fallback schedule until 100+ activity samples are available. On Apple Silicon, Core ML can use the ANE for low-power inference when the trained model is loaded.
-
-## Data Storage
-
-All data stays on your Mac:
-
-| Data | Location |
-|------|----------|
-| Browser activity events | `~/Library/Application Support/Neural-Janitor/activity_events.json` |
-| ML model + lookup fallback | `~/Library/Application Support/Neural-Janitor/TabIdlePredictor.mlmodel`, `~/Library/Application Support/Neural-Janitor/idle_lookup.json` |
-| Companion logs | `~/Library/Application Support/Neural-Janitor/companion.log` |
-| Closed tab records | Chrome extension storage (`chrome.storage.local`) |
-| Tracked tab registry + dwell time | Chrome extension storage (`chrome.storage.local`) |
-
-## Dwell-Time Tracking
-
-Neural-Janitor records foreground tab sessions whenever a tab becomes active, the window gains/loses focus, the browser becomes idle/locked, or the user interacts with the page. Each tracked tab keeps:
-
-- `openedAt`
-- `lastVisited`
-- `dwellMs` (cumulative foreground time)
-- `interactions`
-- category confidence/source
-
-The popup shows both stale age and cumulative time seen. Closed-tab records preserve dwell time, interactions, and a Chrome session id where available so the tab can be restored from the log.
-
-**No data leaves your device.** No analytics, no telemetry, no cloud.
-
-## How NSFW Detection Works
-
-NSFW URLs get special treatment:
-
-1. **Keyword matching**: URL hostname/path is checked against a curated keyword list
-2. **Ultra-short threshold**: 12 hours (vs 7 days default)
-3. **No idle-window gating**: NSFW tabs are closed immediately when stale, even during active hours — unlike other categories which prefer closing during predicted idle windows
-4. **Separate log bucket**: Closed NSFW tabs are stored in their own category in the closed-tab log
-
-The NSFW keyword list is conservative (major sites only) to avoid false positives. It can be extended in `constants.js`.
-
-## Whitelist
-
-Some tabs should never be auto-closed. Add domains to the whitelist in the extension popup settings:
-
-```
-docs.google.com
-github.com/your-org
-```
-
-## Uninstalling
-
-```bash
-chmod +x scripts/uninstall.sh
-./scripts/uninstall.sh
-```
-
-Then remove the extension from Chrome/Edge and delete the `Neural-Janitor/` directory.
-
-## License
-
-MIT
+<p align="center"><sub>Neural-Janitor: Edge-Accelerated Tab Hygiene</sub></p>
