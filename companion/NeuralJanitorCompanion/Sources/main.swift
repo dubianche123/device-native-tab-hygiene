@@ -324,7 +324,7 @@ final class IdlePredictor {
             "targetTrainingSamples": 1_000,
             "minimumTrainingSamples": 100,
             "modelMaturity": maturity,
-            "modelAccuracy": metrics.modelAccuracy ?? NSNull(),
+            "modelAccuracy": (model != nil || !lookup.isEmpty) ? (metrics.modelAccuracy ?? NSNull()) : NSNull(),
             "readinessReason": readinessReason(activityCount: activityCount),
             "currentIdleConfidence": decision["currentIdleConfidence"] ?? 0.0,
             "confidenceCurve": decision["confidenceCurve"] ?? [],
