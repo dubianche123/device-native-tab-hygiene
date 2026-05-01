@@ -103,11 +103,11 @@ This diagram separates the two execution contexts:
 
 Many modern browser tab managers rely on simple hardcoded timers (e.g., "close tabs after 3 days"). This is predictable but fundamentally flawed: a user might be actively using their computer but just not that specific tab, or they might be on a two-week vacation.
 
-Neural-Janitor uses a narrower but smarter model role. It builds a `MLBoostedTreeClassifier` to predict when the user is actually away from the Mac. It only cleans tabs during predicted prolonged idle windows, ensuring you never return to a suddenly missing workspace.
+Neural-Janitor's main learner is the close-time model: it learns how long each kind of page should remain open from your manual close behavior. Idle prediction is deliberately smaller. It acts as a normalized context multiplier alongside foreground/background importance, nudging learned close times shorter when the Mac is actually idle and longer while the machine is active.
 
 | Problem | Traditional Tab Closers | The Neural-Janitor Pattern |
 |:--|:--|:--|
-| **When to close?** | Hardcoded static timer (e.g., 7 days). | Dynamic timer gated by Core ML idle prediction. |
+| **When to close?** | Hardcoded static timer (e.g., 7 days). | Learned close time × tab importance × idle context multiplier. |
 | **Categorization** | Simple URL domain matching. | On-device NLP via Apple `NaturalLanguage` framework. |
 | **Resource Cost** | Constant JavaScript polling in background. | Event-driven background worker + local Core ML inference. |
 | **Privacy** | Often requires syncing data to the cloud. | 100% local. Zero telemetry leaves the device. |
@@ -123,7 +123,8 @@ Neural-Janitor uses a narrower but smarter model role. It builds a `MLBoostedTre
 - **AI Cleanup**: The popup can close or tag low-importance tabs to reduce tab count first, with bounded memory-pressure cleanup because macOS / Chromium may reclaim memory lazily. It protects high-priority categories such as AI tools and work tabs, honors the whitelist, and respects Test mode.
 - **Memory and CPU monitor**: The popup shows memory pressure, CPU usage, and a compact CPU model / thread label such as `M3 8T`.
 - **AI Suggestions**: The popup recommends actions such as reducing tab count or running AI Cleanup, and each recommendation can be ignored for 10 minutes. Suggestions refresh when you run Check, run AI Clean, change modes, change the holiday calendar, save settings, and periodically while the popup is open.
-- **Transparent ML console**: The popup separates Idle Model Samples / Idle Model Readiness from Close-Time Samples, then shows model accuracy when available, last local retrain time, hardware telemetry markers, decision confidence / heuristic estimates, and a low-power inference indicator.
+- **Transparent learning console**: The popup puts close-time learning first, separates context samples from close-time samples, then shows last local retrain time, hardware telemetry markers, idle context likelihood, and a low-power inference indicator.
+- **Current activity vs. idle likelihood**: The ML console now shows the current system state separately from the model's idle likelihood, so an active computer does not get mistaken for a sleeping one.
 - **Closed-tab recovery**: Tabs closed by Neural-Janitor are logged by category and can be restored from the Closed Log, either one-by-one or by selecting multiple entries and restoring them together.
 
 ## Category Closure Time Rules
@@ -149,10 +150,10 @@ Tabs are assigned a closure time based on their category, learned manual-close b
 The system is split into two deployable artifacts:
 
 1. **Manifest V3 Extension**: Handles browser tabs, injects content scripts for interaction tracking, manages the closed tab local registry, and communicates with the companion app via Native Messaging.
-2. **Swift Companion App**: An invisible macOS daemon that aggregates the behavioral data, trains the local ML model, and serves predictions and page classifications.
+2. **Swift Companion App**: An invisible macOS daemon that aggregates activity context, trains the auxiliary idle/context model, and serves page classifications.
 
 ### 1. Tab Interaction Tracker
-The tracker is the signal layer, not the cleanup decision-maker. It records four facts per tab: when it entered foreground, when it left foreground, cumulative foreground dwell, and interaction count. Cleanup uses the background clock (`now - lastBackgroundedAt`) against an effective closure time. Foreground/background ratio is normalized into an importance multiplier, capped at `0.75x..1.75x`, multiplied by the manually learned retention time for that category, and then capped by the user's closure time limit. Active, pinned, and audible tabs are protected before any automatic close.
+The tracker is the signal layer, not the cleanup decision-maker. It records four facts per tab: when it entered foreground, when it left foreground, cumulative foreground dwell, and interaction count. Cleanup uses the background clock (`now - lastBackgroundedAt`) against an effective closure time. Foreground/background ratio is normalized into an importance multiplier, capped at `0.75x..1.75x`, then combined with the learned close time and an idle-context multiplier (`0.75x` idle, `0.9x` predicted idle, `1.15x` active). The user's closure time limit remains the final cap. Active, pinned, and audible tabs are protected before any automatic close.
 
 ### 2. Manual Closure Learner
 Real browser closes (`Ctrl+W` / close button) and popup closes are stored in `chrome.storage.local` as closure-learning samples with category, foreground dwell, background age, interaction count, and close time. Learning starts from short-but-real samples of about 15 seconds and needs 3 useful manual closes for a provisional learned close time. Learned close times prefer meaningful manual background-age samples, with foreground dwell as a fallback for active-close patterns. Programmatic closes from stale checks and AI Cleanup are explicitly suppressed from the browser-close path and recorded as context-only auto samples.
@@ -160,8 +161,10 @@ Real browser closes (`Ctrl+W` / close button) and popup closes are stored in `ch
 ### 3. Local Page Classifier
 When the extension cannot confidently categorize a URL, it asks the companion app. The companion uses the Apple `NaturalLanguage` framework to tokenize the page title, description, and content, scoring them against a weighted taxonomy.
 
-### 4. Core ML Predictor
+### 4. Auxiliary Context Predictor
 The companion builds a 9-feature `TrainingSample` from historical activity: day of week, hour, minute, weekend flag, minutes since last active, active events in the last 24 hours, active days in the last 7 days, tab count, and average dwell minutes. It trains a `MLBoostedTreeClassifier` and loads it through Core ML with `computeUnits = .all`.
+
+This predictor is intentionally auxiliary. It informs the idle-context multiplier and UI insight, while the close-time learner remains the primary decision source.
 
 Core ML can use the Apple Neural Engine, GPU, or CPU depending on macOS scheduling and model support. Public APIs expose requested compute units and hardware availability, not the exact processor used for each individual inference, so the UI reports **Model / Learning / Fallback state** rather than pretending to know the private scheduler's exact choice.
 
@@ -295,7 +298,7 @@ The import script verifies checksums, backs up existing local artifacts under:
 ~/Library/Application Support/Neural-Janitor/backups/
 ```
 
-After importing, restart Chrome / Edge or reload the extension so the companion reloads the model. Open the popup and check **Link: Connected**, **Idle Model Samples**, **Close-Time Samples**, and the ML runtime label.
+After importing, restart Chrome / Edge or reload the extension so the companion reloads the model. Open the popup and check **Link: Connected**, **Context Samples**, **Close-Time Samples**, and the ML runtime label.
 
 ## Using The Popup
 

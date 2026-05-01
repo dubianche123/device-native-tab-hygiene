@@ -403,7 +403,12 @@ final class IdlePredictor {
             ],
             "sampledAt": Date().timeIntervalSince1970 * 1000,
             "note": runtimeNote,
+            "currentActivityState": currentActivityState(),
         ]
+
+        if let stateAt = currentActivityStateAtMs() {
+            payload["currentActivityStateAt"] = stateAt
+        }
 
         if let lastInferenceAt {
             payload["lastInferenceAt"] = lastInferenceAt.timeIntervalSince1970 * 1000
@@ -493,6 +498,20 @@ final class IdlePredictor {
             return attrs[.modificationDate] as? Date
         }
         return dates.max()
+    }
+
+    private func latestActivityEvent() -> ActivityEvent? {
+        store.all().last
+    }
+
+    private func currentActivityState() -> String {
+        guard let latest = latestActivityEvent() else { return "unknown" }
+        return latest.state
+    }
+
+    private func currentActivityStateAtMs() -> Double? {
+        guard let latest = latestActivityEvent() else { return nil }
+        return latest.timestamp * 1000
     }
 
     private func maybeTrainIfNeeded() {

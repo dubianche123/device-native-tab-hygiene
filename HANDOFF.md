@@ -198,15 +198,16 @@ Both `performStaleCheck()` and `aiCleanup()` skip all protected tab IDs. This pr
 **Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions compare the background clock (`now - lastBackgroundedAt`) against an effective close-after time. For learned categories, that time is:
 
 ```
-modelClosureTime = learnedManualThreshold × importanceMultiplier
+modelClosureTime = learnedManualThreshold × importanceMultiplier × idleContextMultiplier
 effectiveClosureTime = min(modelClosureTime, userClosureTimeLimit)
 importanceMultiplier = 0.75 + normalizedFocusRatio × 1.0
 normalizedFocusRatio = clamp(foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs), 0, 1)
+idleContextMultiplier = 0.75 if chrome.idle is idle/locked, 0.9 inside predicted idle window, otherwise 1.15
 ```
 
-The multiplier is clamped to `0.75x..1.75x`. The model-calculated closure time is capped to `[1 min, 2× category default]`, then the user's Settings slider caps it as the final closure time limit. The slider is not a model replacement; it is the upper bound users can reason about.
+The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an auxiliary context weight, not the primary model and not a hard gate. The model-calculated closure time is capped to `[1 min, 2× category default]`, then the user's Settings slider caps it as the final closure time limit. The slider is not a model replacement; it is the upper bound users can reason about.
 
-**Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, and close reason for stale checks / AI Cleanup.
+**Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, idle-context multiplier, and close reason for stale checks / AI Cleanup.
 
 **AI Cleanup scoring**: Uses `backgroundAgeMs / effectiveClosureTime` as threshold pressure. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term.
 
@@ -267,7 +268,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category learned 
 4. Recommended learned close time = `median_background_age × 1.5`, clamped to category floor and `2× default`.
 5. Requires ≥ 3 meaningful manual close samples before recommending.
 6. Fallback: if there are not enough meaningful `backgroundAgeMs` samples yet, use meaningful `dwellMs` (foreground dwell) as proxy for active-close patterns.
-7. Runtime close time: `min(learned close time × foreground/background importance multiplier, user maximum close-after slider)`. If no learned time exists yet, the category default is capped by the user slider.
+7. Runtime close time: `min(learned close time × foreground/background importance multiplier × idle-context multiplier, user maximum close-after slider)`. If no learned time exists yet, the category default is capped by the user slider.
 
 **Learned close-time floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive. Uncategorized `other` floors at 12 hours because unknown pages should be conservative until classification improves.
 
@@ -275,7 +276,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category learned 
 
 **Timed blacklist**: Settings store `blacklist` as `[{ pattern, hours, minutes }]`. Matching is substring-based against hostname or full URL. Blacklist entries use fixed close time (`0–99` hours, `0–59` minutes, fallback 1 hour), bypass category/learned thresholds, and are excluded from closure learning like whitelist traffic. `performStaleCheck()` records blacklist closes with `blacklist_*` reason; AI Cleanup can close blacklisted tabs only after their fixed time has elapsed.
 
-**Popup UI**: Settings sliders are user-facing maximum close-after times, not abstract model thresholds. Each category row shows the current ML × importance close time and the final used time (`min(ML time, slider cap)`). The ML console separates `Idle Model Samples` / `Idle Model Readiness` (idle activity model) from `Close-Time Samples` (manual / auto close learning). "Close-Time Learning" in ML Insights shows per-category stats (manual/auto counts, median foreground dwell, median background age, learned recommendation vs default, delta). Reset button in Settings.
+**Popup UI**: Settings sliders are user-facing maximum close-after times, not abstract model thresholds. Each category row shows the learned close-time estimate and the final used time (`min(learned estimate, slider cap)`). The console treats close-time learning as primary: `Close-Time Samples` and `Close-Time Readiness` describe manual close learning, while `Context Samples` are auxiliary idle/activity signals. The decision panel splits current system activity (`Active now` / `Idle now`) from the model's idle likelihood, so active use does not get mislabeled as sleep. "Close-Time Learning" in ML Insights shows per-category stats (manual/auto counts, median foreground dwell, median background age, learned recommendation vs default, delta). Reset button in Settings.
 
 **Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `getLearnedThresholds`, `getCategoryClosureStats`, `getLearningSummary`, `resetClosureLearning`.
 
@@ -312,11 +313,12 @@ All 8 JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 - DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.
 - URL paths are never matched against category keywords — this is intentional to prevent false positives.
 - Finalized (2026-05-01): IPC logic is synced for protocol version 2, including per-day `holidayLevels` for prediction requests. Hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is handled with clearly labeled browser heuristic estimates. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are implemented and syntax-verified.
-- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses median background age × 1.5 to recommend per-category learned close-after times. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Runtime cleanup multiplies the learned time by foreground/background importance, then caps it with the user-facing maximum close-after slider.
+- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses median background age × 1.5 to recommend per-category learned close-after times. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Runtime cleanup multiplies the learned time by foreground/background importance and idle context, then caps it with the user-facing maximum close-after slider.
 - Added (2026-05-01): Protected tabs + foreground/background lifecycle. `getProtectedTabIds()` queries Chrome for active/pinned/audible tabs before any auto-close scan — both `performStaleCheck()` and `aiCleanup()` skip them. `lastForegroundAt` / `lastBackgroundedAt` replace `lastVisited` for stale detection (fallback for old entries). AI Cleanup scoring uses `backgroundAgeMs` + `focusRatio` for importance weighting.
 - Adjusted (2026-05-01): `snapshotAllTabs()`, tab creation, tab navigation, popup active-tab display, and AI Suggestions now preserve/use `lastBackgroundedAt` consistently. Suggestions should not count protected tabs as stale.
 - Added (2026-05-01): SERP exclusion — search engine result pages (Google, Bing, Yahoo, DuckDuckGo, Baidu, Sogou, Naver, Ecosia, Startpage, Yandex) are excluded from closure learning. These are transient navigation waypoints opened and closed in seconds; recording them pollutes per-category learned thresholds. Tabs are still tracked for display but `recordTabClosureForLearning()` returns early when the URL matches a SERP pattern. `SERP_PATTERNS` is defined in `background.js`.
 - Fixed (2026-05-01): Close-Time Learning UI in popup redesigned from chaotic `flex-wrap` rows to clean stacked cards (`cl-card`). Each category gets a header line (name + manual/auto counts + recommendation) and a detail line for foreground, background, and default close time. Removed the unused legend section.
+- Note (2026-05-01): macOS Focus sync is user-local only. Do not commit a Focus helper script, Native Messaging IPC, installer hook, or Shortcut names to the cloud repo unless the user explicitly changes that policy. If needed, document it as a private local wrapper outside the repository.
 - Updated (2026-05-01): DOMAIN_MAP expanded — `finviz.com` → finance, `oracle.com`/`microsoft.com` → work, `open.mimo.xiaomi.com` → work, `deepl.com`/`lingq.com`/`tutorialsdojo.com`/`eikaiwa.dmm.com`/`learn.microsoft.com`/`skillbuilder.aws` → reference. Reference category keywords updated to include certification/exam/translation terms.
 - Added (2026-05-01): CPU usage monitoring — `chrome.system.cpu` permission, `getCPUUsage()` in background.js with snapshot-delta calculation, CPU bar in popup header alongside MEM bar.
 - Fixed (2026-05-01): Holiday prediction badges now show the actual holiday name (e.g. `🎌 みどりの日`) instead of generic "Holiday" text. `getHolidayName()` is called per prediction day and the name is rendered in the badge and tooltip.

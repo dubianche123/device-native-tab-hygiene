@@ -103,11 +103,11 @@ flowchart TB
 
 许多现代浏览器标签页管理工具依赖简单的硬编码定时器（例如，“3天后关闭标签页”）。这很可预测，但也存在根本缺陷：用户可能正在积极使用电脑，只是没有查看那个特定的标签页；或者他们可能正在休两周的假。
 
-Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoostedTreeClassifier` 来预测用户何时真正离开 Mac。它只在预测的长期闲置窗口期间清理标签页，确保你回来时不会发现工作区突然消失。
+Neural-Janitor 的主学习对象是关闭时间：它会从你的手动关闭行为里学习每类页面通常该保留多久。idle 预测被刻意降级成辅助情境权重，和前台/后台重要度一起归一化后，去轻微拉短或拉长学习到的关闭时间。
 
 | 痛点 | 传统的标签页清理工具 | Neural-Janitor 架构 |
 |:--|:--|:--|
-| **何时关闭？** | 硬编码的静态定时器（如 7 天）。 | 由 Core ML 闲置预测控制的动态定时器。 |
+| **何时关闭？** | 硬编码的静态定时器（如 7 天）。 | 学到的关闭时间 × 标签页重要度 × idle 情境倍率。 |
 | **内容分类** | 简单的 URL 域名匹配。 | 基于 Apple `NaturalLanguage` 框架的设备端 NLP 分词。 |
 | **资源消耗** | JavaScript 在后台持续轮询。 | 事件驱动的后台 Worker + 本地 Core ML 推理。 |
 | **隐私安全** | 通常需要将数据同步到云端。 | 100% 本地运行。零遥测数据离开设备。 |
@@ -123,7 +123,8 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 - **AI Cleanup**：插件会优先降低标签页数量，再有限处理内存压力，因为 macOS / Chromium 不一定会在关闭标签后立刻释放内存。它会根据类别优先级、交互次数和闲置时间排序，保护 AI / 工作类标签页，遵守白名单，也会遵守测试模式。
 - **MEM / CPU 监控**：Popup 会显示内存压力、CPU 占用，以及类似 `M3 8T` 的简短芯片 / 线程数标记。
 - **AI Suggestions**：插件会给出减少标签页、运行 AI Cleanup、执行检查等建议，每条建议都可以忽略 10 分钟。点击 Check、AI Clean、切换模式、切换节假日日历、保存设置，以及 Popup 保持打开时，建议都会刷新。
-- **透明 ML 控制台**：Popup 会把 Idle Model Samples / Idle Model Readiness 和 Close-Time Samples 分开显示，并展示模型准确率、最后本地训练时间、硬件遥测标记、决策置信度 / 启发式估算，以及低功耗推理指示灯。
+- **透明学习控制台**：Popup 会优先展示关闭时间学习，把情境样本和关闭样本分开显示，并展示最后本地训练时间、硬件遥测标记、idle 情境概率，以及低功耗推理指示灯。
+- **当前活动状态与 idle 概率分离**：控制台会把当前系统状态和模型对 idle 的概率分开显示，避免“人还在用电脑，却被看成正在睡觉”的误解。
 - **关闭标签页恢复**：由 Neural-Janitor 关闭的标签页会按类别记录，并可从 Closed Log 单个恢复或勾选多个后批量恢复。
 
 ## 分类关闭时间规则
@@ -149,10 +150,10 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 系统被拆分为两个可部署的组件：
 
 1. **Manifest V3 Extension**：处理浏览器标签页，注入 content scripts 追踪交互，管理本地关闭标签页注册表，并通过 Native Messaging 与伴随程序通信。
-2. **Swift Companion App**：一个不可见的 macOS 守护进程，负责聚合行为数据，训练本地 ML 模型，并提供闲置预测和页面分类。
+2. **Swift Companion App**：一个不可见的 macOS 守护进程，负责聚合活动情境，训练辅助 idle/context 模型，并提供页面分类。
 
 ### 1. 标签页交互追踪器 (Tab Interaction Tracker)
-追踪器只是信号采集层，不直接决定是否关闭网页。它为每个标签页记录四类事实：什么时候进入前台、什么时候离开前台、累计前台停留多久、发生过多少交互。关闭判断用背景时钟（`now - lastBackgroundedAt`）对比一个合成后的有效关闭时间。前台 / 背景占比会被归一化成重要度倍率，并限制在 `0.75x..1.75x`，再乘以该类别从手动关闭行为学到的保留时间，最后再被用户设置的关闭时间上限截断。当前 active、pinned、audible 标签页在任何自动关闭前都会被保护。
+追踪器只是信号采集层，不直接决定是否关闭网页。它为每个标签页记录四类事实：什么时候进入前台、什么时候离开前台、累计前台停留多久、发生过多少交互。关闭判断用背景时钟（`now - lastBackgroundedAt`）对比一个合成后的有效关闭时间。前台 / 背景占比会被归一化成重要度倍率，并限制在 `0.75x..1.75x`，再和学到的关闭时间、idle 情境倍率组合起来（系统 idle 为 `0.75x`，预测 idle 为 `0.9x`，active 为 `1.15x`）。用户设置的关闭时间上限仍然是最终 cap。当前 active、pinned、audible 标签页在任何自动关闭前都会被保护。
 
 ### 2. 手动关闭学习器 (Manual Closure Learner)
 浏览器中的真实关闭行为（`Ctrl+W` / 关闭按钮）和插件 Popup 里的关闭行为会被写入 `chrome.storage.local`，样本包含分类、前台停留时间、背景年龄、交互次数和关闭时间。学习从约 15 秒以上的短但真实样本开始，只需要 3 条有效手动关闭样本就能给出临时学习关闭时间。学习出的关闭时间优先使用有意义的手动背景年龄样本；如果用户经常在前台看完后直接关闭，则用前台停留时间作为 fallback。过期检查和 AI Cleanup 触发的程序化关闭会被显式排除出浏览器手动关闭路径，只作为自动清理上下文记录。
@@ -160,8 +161,10 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 ### 3. 本地页面分类器 (Local Page Classifier)
 当扩展程序无法自信地对 URL 进行分类时，它会询问伴随程序。伴随程序使用 Apple `NaturalLanguage` 框架对网页标题、描述和内容进行分词，并对照加权分类法进行打分。
 
-### 4. Core ML 预测器 (Core ML Predictor)
+### 4. 辅助情境预测器 (Auxiliary Context Predictor)
 伴随程序从历史活动中构建一个包含 9 个特征的 `TrainingSample`：星期几、小时、分钟、是否周末、距离上次活跃多久、过去 24 小时活跃事件数、过去 7 天活跃天数、标签页数量、平均停留分钟数。它会训练一个 `MLBoostedTreeClassifier`，并通过 `computeUnits = .all` 加载到 Core ML。
+
+这个预测器是辅助角色。它只影响 idle 情境倍率和 UI 洞察，真正决定“网页该留多久”的主学习器仍然是关闭时间学习。
 
 Core ML 可能根据 macOS 调度和模型支持情况使用 Apple Neural Engine、GPU 或 CPU。公开 API 能告诉我们请求了哪些计算单元以及硬件是否可用，但不会暴露每一次推理到底跑在哪个处理器上。因此 UI 会展示 **Model / Learning / Fallback 状态**，而不会假装知道系统私有调度器的精确选择。
 
@@ -295,7 +298,7 @@ Neural-Janitor 学到的本地模型文件默认保存在：
 ~/Library/Application Support/Neural-Janitor/backups/
 ```
 
-导入后重启 Chrome / Edge，或者在扩展管理页 reload 插件，让 companion 重新加载模型。随后打开插件 Popup，确认 **Link: Connected**、**Idle Model Samples**、**Close-Time Samples** 和 ML runtime label 正常显示。
+导入后重启 Chrome / Edge，或者在扩展管理页 reload 插件，让 companion 重新加载模型。随后打开插件 Popup，确认 **Link: Connected**、**Context Samples**、**Close-Time Samples** 和 ML runtime label 正常显示。
 
 ## Popup 使用方式
 

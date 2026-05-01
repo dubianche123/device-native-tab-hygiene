@@ -346,18 +346,27 @@ function acceleratorLabel(status = {}) {
   return 'Fallback';
 }
 
-function decisionText(status = {}, confidence = 0) {
+function activityHeadlineText(status = {}) {
+  const currentState = String(status.currentActivityState || '').toLowerCase();
+  if (currentState === 'idle') return 'Idle now';
+  if (currentState === 'locked') return 'Locked';
+  if (currentState === 'active') return 'Active now';
+  if (status.runtime === 'disabled') return 'Activity unknown';
+  return 'Activity unknown';
+}
+
+function idleLikelihoodText(status = {}, confidence = 0) {
   const formatted = formatPercent(confidence);
   if (status.runtime === 'coreml') {
-    return `${acceleratorLabel(status)} Predicts Idle Confidence: ${formatted}`;
+    return `${acceleratorLabel(status)} idle likelihood: ${formatted}`;
   }
   if (status.runtime === 'lookup') {
-    return `Learning Estimates Idle Likelihood: ${formatted}`;
+    return `Learning idle likelihood: ${formatted}`;
   }
   if (status.runtime === 'disabled') {
-    return 'ML Off: no idle estimate';
+    return 'ML off: no idle estimate';
   }
-  return `Fallback Idle Estimate: ${formatted}`;
+  return `Fallback idle estimate: ${formatted}`;
 }
 
 function retrainRuntimeLabel(status = {}) {
@@ -439,6 +448,7 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   const accuracy = document.getElementById('ml-accuracy');
   const retrain = document.getElementById('ml-retrain');
   const decision = document.getElementById('decision-headline');
+  const decisionSubline = document.getElementById('decision-subline');
   const power = document.getElementById('power-light');
 
   const trainingSamples = status.trainingSamples || 0;
@@ -448,28 +458,30 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   const totalClosureSamples = closureLearning.totalSamples || status.closureLearning?.totalSamples || 0;
   const manualClosureSamples = closureLearning.manualCount || status.closureLearning?.manualCount || 0;
   const autoClosureSamples = closureLearning.autoCount || status.closureLearning?.autoCount || 0;
-  const maturity = status.modelLoaded
-    ? (
-      typeof status.modelMaturity === 'number'
-        ? status.modelMaturity
-        : Math.min(1, trainingSamples / targetSamples)
-    )
-    : Math.min(1, trainingSamples / minimumSamples);
+  const learnedCategoryCount = closureLearning.categoriesWithRecommendations
+    || status.closureLearning?.categoriesWithRecommendations
+    || 0;
+  const trackedCategoryCount = closureLearning.categoriesTracked
+    || status.closureLearning?.categoriesTracked
+    || 0;
+  const closeReadiness = trackedCategoryCount > 0
+    ? learnedCategoryCount / trackedCategoryCount
+    : Math.min(1, manualClosureSamples / 3);
 
   link.textContent = status.connected ? 'Connected' : 'Disconnected';
   link.style.color = status.connected ? 'var(--success)' : 'var(--danger)';
   if (status.modelLoaded) {
     samples.textContent = `${trainingSamples.toLocaleString()} / ${targetSamples.toLocaleString()}`;
-    samples.title = 'Model samples from activity events used to train the idle predictor.';
+    samples.title = 'Auxiliary activity samples used only as cleanup context, not as the main close-time learner.';
   } else if (trainingSamples > 0) {
     samples.textContent = `${trainingSamples.toLocaleString()} / ${minimumSamples.toLocaleString()} valid`;
-    samples.title = 'Model samples from activity events used to train the idle predictor.';
+    samples.title = 'Auxiliary activity samples used only as cleanup context, not as the main close-time learner.';
   } else if (activityCount > 0) {
     samples.textContent = `0 valid (${activityCount.toLocaleString()} events)`;
-    samples.title = 'Activity events are being collected before the first model training run.';
+    samples.title = 'Activity events are being collected as optional idle/context signals.';
   } else {
     samples.textContent = `0 / ${minimumSamples.toLocaleString()} valid`;
-    samples.title = 'Activity events are being collected before the first model training run.';
+    samples.title = 'Activity events are being collected as optional idle/context signals.';
   }
 
   if (closureSamples) {
@@ -479,11 +491,13 @@ function renderMLConsole(status = {}, closureLearning = {}) {
       : 'No closure learning data yet.';
   }
 
-  const normalizedMaturity = Math.max(0, Math.min(1, maturity));
+  const normalizedMaturity = Math.max(0, Math.min(1, closeReadiness));
   const maturityPercent = Math.round(normalizedMaturity * 100);
-  const readinessLabel = normalizedMaturity > 0 && maturityPercent === 0 ? '<1%' : `${maturityPercent}%`;
+  const readinessLabel = trackedCategoryCount > 0
+    ? `${learnedCategoryCount}/${trackedCategoryCount} categories`
+    : `${Math.min(manualClosureSamples, 3)}/3 manual`;
   progress.style.width = `${normalizedMaturity > 0 ? Math.max(1, maturityPercent) : 0}%`;
-  progress.parentElement.title = 'Idle model readiness: valid activity samples compared with the target sample count. Close-time samples are tracked separately.';
+  progress.parentElement.title = 'Close-time readiness: categories with enough manual close samples to recommend a learned close time.';
   if (progressValue) {
     progressValue.textContent = readinessLabel;
     progressValue.title = progress.parentElement.title;
@@ -504,7 +518,11 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   const confidence = typeof status.currentIdleConfidence === 'number'
     ? status.currentIdleConfidence
     : 0;
-  decision.textContent = decisionText(status, confidence);
+  decision.textContent = activityHeadlineText(status);
+  if (decisionSubline) {
+    decisionSubline.textContent = idleLikelihoodText(status, confidence);
+    decisionSubline.title = status.readinessReason || '';
+  }
   decision.title = status.readinessReason || '';
   renderConfidenceCurve(status.confidenceCurve || []);
 

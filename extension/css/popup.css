@@ -578,6 +578,13 @@ body {
   margin-bottom: 5px;
 }
 
+.decision-panel__subline {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+
 .confidence-curve {
   display: grid;
   grid-template-columns: repeat(7, 1fr);

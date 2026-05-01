@@ -154,10 +154,17 @@ function normalizedTabImportance(entry, backgroundAgeMs) {
   };
 }
 
-function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now()) {
+function idleContextMultiplier({ predictedIdle = false, currentlyIdle = false } = {}) {
+  if (currentlyIdle) return 0.75;
+  if (predictedIdle) return 0.9;
+  return 1.15;
+}
+
+function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(), context = {}) {
   const categoryKey = entry.category || 'other';
   const backgroundAgeMs = closureAgeMs(entry, now);
   const importance = normalizedTabImportance(entry, backgroundAgeMs);
+  const contextMultiplier = idleContextMultiplier(context);
   const closureLimit = settings.customThresholds?.[categoryKey];
   const hasClosureLimit = typeof closureLimit === 'number' && closureLimit > 0;
   const learnedThreshold = learnedThresholds?.[categoryKey];
@@ -170,22 +177,23 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
 
   if (hasLearnedThreshold) {
     modelMaxAgeMs = clamp(
-      learnedThreshold * importance.importanceMultiplier,
+      learnedThreshold * importance.importanceMultiplier * contextMultiplier,
       MIN_EFFECTIVE_THRESHOLD_MS,
       Math.max(MIN_EFFECTIVE_THRESHOLD_MS, defaultThreshold * 2),
     );
-    thresholdSource = 'learned_x_importance';
+    thresholdSource = 'learned_x_importance_x_context';
   }
 
   const maxAgeMs = Math.min(modelMaxAgeMs, limitMs);
   if (maxAgeMs < modelMaxAgeMs) {
-    thresholdSource = hasLearnedThreshold ? 'learned_x_importance_capped' : 'default_capped';
+    thresholdSource = hasLearnedThreshold ? 'learned_x_importance_x_context_capped' : 'default_capped';
   }
 
   return {
     ...importance,
     categoryKey,
     baseThresholdMs: hasLearnedThreshold ? learnedThreshold : defaultThreshold,
+    contextMultiplier,
     modelMaxAgeMs,
     limitMs,
     maxAgeMs,
@@ -696,11 +704,9 @@ async function performStaleCheck() {
   const closedTabs = [];
   const taggedTabs = [];
   let staleCount = 0;
-  let deferredCount = 0;
-  const active = await getActiveSession();
   const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
   const currentlyIdle = await browserIsIdle();
-  const closeWindowIsQuiet = predictedIdle || currentlyIdle;
+  const retentionContext = { predictedIdle, currentlyIdle };
   const testMode = settings.testMode === true;
   const learnedThresholds = await getLearnedThresholds();
   const protectedTabs = await getProtectedTabIds();
@@ -733,28 +739,11 @@ async function performStaleCheck() {
         categoryKey,
       };
     } else {
-      result = tabRetentionProfile(entry, settings, learnedThresholds, now);
+      result = tabRetentionProfile(entry, settings, learnedThresholds, now, retentionContext);
     }
 
     if (!result.stale) continue;
     staleCount++;
-
-    // NSFW closes as soon as stale. Other categories prefer quiet windows
-    // learned by Core ML or reported by chrome.idle.
-    let shouldClose = true;
-
-    if (categoryKey !== 'nsfw') {
-      // For non-NSFW categories, prefer closing during idle windows
-      // but close anyway if age exceeds 2x the threshold (safety net)
-      if (!closeWindowIsQuiet && result.backgroundAgeMs < result.maxAgeMs * 2) {
-        shouldClose = false;
-      }
-    }
-
-    if (!shouldClose) {
-      deferredCount++;
-      continue;
-    }
 
     if (testMode) {
       // Test mode: tag the tab instead of closing it
@@ -834,10 +823,9 @@ async function performStaleCheck() {
     testMode,
     scannedCount: Object.keys(registry).length,
     staleCount,
-    deferredCount,
     closedCount: testMode ? 0 : closedTabs.length,
     taggedCount: testMode ? taggedTabs.length : 0,
-    closeWindowIsQuiet,
+    idleContextMultiplier: idleContextMultiplier(retentionContext),
   };
 }
 
@@ -923,8 +911,10 @@ async function aiCleanup() {
   const mem = await getMemoryPressure();
   const registry = await getTabRegistry();
   const tabCount = Object.keys(registry).length;
-  const active = await getActiveSession();
   const now = Date.now();
+  const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
+  const currentlyIdle = await browserIsIdle();
+  const retentionContext = { predictedIdle, currentlyIdle };
 
   // Already under targets?
   if (mem.percent <= targetMemory && tabCount <= targetTabs) {
@@ -954,7 +944,7 @@ async function aiCleanup() {
     const blacklistMatch = matchBlacklist(entry.url, blacklist);
     const catInfo = CATEGORIES[entry.category] || {};
     const priority = catInfo.priority ?? 50;
-    let retention = tabRetentionProfile(entry, settings, learnedThresholds, now);
+    let retention = tabRetentionProfile(entry, settings, learnedThresholds, now, retentionContext);
     const backgroundAgeMs = retention.backgroundAgeMs;
 
     // Blacklisted tabs: only add if they exceed their fixed threshold
@@ -1149,11 +1139,14 @@ async function getAISuggestion() {
   const registry = await getTabRegistry();
   const protectedTabs = await getProtectedTabIds();
   const learnedThresholds = await getLearnedThresholds();
+  const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
+  const currentlyIdle = await browserIsIdle();
+  const retentionContext = { predictedIdle, currentlyIdle };
   let staleCount = 0;
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
     if (protectedTabs.has(tabId)) continue;
-    const result = tabRetentionProfile(entry, settings, learnedThresholds, now);
+    const result = tabRetentionProfile(entry, settings, learnedThresholds, now, retentionContext);
     if (result.stale) staleCount++;
   }
   if (staleCount > 0) {
@@ -1313,6 +1306,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             modelMaturity: 0,
             modelAccuracy: null,
             readinessReason: 'Companion disabled in settings',
+            currentActivityState: 'unknown',
             currentIdleConfidence: 0,
             confidenceCurve: [],
             decisionThreshold: 0.55,

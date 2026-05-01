@@ -401,6 +401,7 @@ async function disconnectedStatus(error = null) {
     modelMaturity: 0,
     modelAccuracy: null,
     readinessReason: 'Native link offline; showing a browser fallback estimate while NPU telemetry is unavailable',
+    currentActivityState: 'unknown',
     currentIdleConfidence: await fallbackConfidenceNow(),
     confidenceCurve: await fallbackConfidenceCurve(),
     decisionThreshold: 0.55,
