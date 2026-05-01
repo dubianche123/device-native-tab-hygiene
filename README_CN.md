@@ -18,75 +18,78 @@ Neural-Janitor 是一款面向 Chrome / Edge 的标签页管理扩展，依托 A
 
 ```mermaid
 flowchart TB
-  subgraph actors["外部角色与平台 API"]
+  subgraph actors["外部角色与平台"]
     direction LR
-    user(["Person<br/>浏览器用户"])
-    chrome[["🧩 Chrome / Edge APIs<br/>tabs · idle · sessions · system"]]
+    user(["👤 用户<br/>浏览行为"])
+    chrome[["🧩 浏览器 API<br/>tabs · idle · storage · system"]]
   end
 
-  subgraph browser["容器：Chrome / Edge 扩展（Manifest V3）"]
-    direction LR
-    popup["🖥️ Popup UI<br/>模式 · 设置 · ML 控制台"]
-    tracker["📍 标签追踪器<br/>前台 · 停留 · 交互"]
-    category["🏷️ 类别引擎<br/>域名映射 · 本地信号 · 域名记忆"]
-    hygiene["🧹 清理调度器<br/>Check · AI Clean · 测试标记"]
-    settings[("⚙️ 本地设置<br/>关闭时间上限 · 日历 · 白名单")]
-    closedLog[("↩️ 已关闭标签页日志<br/>恢复记录")]
+  subgraph browser["容器：Chrome / Edge 扩展 (Manifest V3)"]
+    direction TB
+    subgraph popup["🖥️ 前端：弹窗 UI"]
+      p_ui["交互式仪表盘<br/>ML 控制台 · AI 建议"]
+      p_telemetry["状态与遥测<br/>CPU / 内存 / 功耗信号"]
+      p_log["已关闭标签日志<br/>恢复与记录"]
+    end
+
+    subgraph background["⚙️ 后端：服务工作线程"]
+      b_tracker["📍 标签追踪器<br/>焦点 · 停留 · 交互"]
+      b_learner["🎓 关闭学习器<br/>手动 vs 自动采样"]
+      b_engine["🏷️ 类别引擎<br/>域名映射 · 记忆 · 信号"]
+      b_orchestrator["🧹 清理调度器<br/>过期检查 · AI 清理 · 逻辑"]
+    end
+
+    subgraph storage["💾 持久化：chrome.storage.local"]
+      s_registry[("实时注册表<br/>活跃标签页条目")]
+      s_samples[("学习存储<br/>行为样本")]
+      s_settings[("用户配置<br/>规则 · 白名单 · 黑名单")]
+    end
   end
 
-  subgraph dataflow["IPC 与本地学习回路"]
-    direction LR
-    sampleBus["活动样本<br/>标签状态 · 页面元数据"]
-    nativeBus["Native Messaging<br/>Protocol v2 JSON over stdio"]
-    resultBus["预测 · 健康状态 · 分类<br/>闲置窗口 · 遥测"]
+  subgraph ipc["通信路径"]
+    nativeBus["📬 Native Messaging (V2)<br/>JSON over stdio"]
   end
 
   subgraph native["容器：macOS Swift 伴随程序"]
-    direction LR
-    collector["📥 活动采集器<br/>闲置状态 · 标签页上下文"]
-    classifier["🔤 本地页面分类器<br/>NaturalLanguage 打分"]
-    predictor["🧠 Chronos 引擎<br/>9 特征 Core ML 预测器"]
-    artifacts[("🗄️ Application Support<br/>事件 · lookup · 模型指标")]
+    direction TB
+    n_host["原生消息宿主<br/>事件多路复用"]
+    n_classifier["🔤 NLP 分类器<br/>NaturalLanguage 框架"]
+    n_chronos["🧠 Chronos 引擎<br/>9 特征 ML 分类器"]
+    n_storage[("🗄️ 原生支持<br/>事件历史 · ML 模型")]
   end
 
-  coreml[["⚡ Apple Core ML 运行时<br/>ANE · GPU · CPU scheduler"]]
+  coreml[["⚡ Apple Core ML 运行时<br/>ANE · GPU · CPU 调度"]]
 
-  user --> popup
-  chrome --> tracker
-  popup --> hygiene
-  tracker --> category --> hygiene
-  settings --> hygiene
-  hygiene -->|"关闭 · 标记 · 恢复"| chrome
-  hygiene --> closedLog
-  tracker --> sampleBus
-  category --> sampleBus
-  sampleBus --> nativeBus --> collector
-  category --> nativeBus --> classifier
-  collector --> artifacts
-  artifacts --> predictor
-  classifier --> predictor
-  predictor <--> coreml
-  predictor --> resultBus --> popup
-  classifier --> resultBus
+  %% 浏览器内部流
+  user --> p_ui
+  chrome --> b_tracker
+  p_ui <--> background
+  background <--> storage
+  b_tracker --> b_engine
+  b_engine --> b_orchestrator
+  b_learner <--> s_samples
+  b_orchestrator --> chrome
 
+  %% 跨容器 IPC
+  background <--> nativeBus <--> n_host
+  n_host <--> n_classifier
+  n_host <--> n_chronos
+  n_chronos <--> n_storage
+  n_chronos <--> coreml
+
+  %% 样式
   style actors fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px
-  style dataflow fill:none,stroke:#94a3b8,stroke-width:1px
+  style browser fill:#f1f5f9,stroke:#64748b,stroke-width:2px
+  style native fill:#f0fdf4,stroke:#16a34a,stroke-width:2px
+  style popup fill:#ffffff,stroke:#3b82f6,stroke-dasharray: 5 5
+  style background fill:#ffffff,stroke:#3b82f6
+  style storage fill:#fff7ed,stroke:#ea580c
+  style ipc fill:none,stroke:#94a3b8,stroke-dasharray: 2 2
 
-  classDef person fill:#f9f2d7,stroke:#b59b3b,color:#2f2611,stroke-width:1px
-  classDef browser fill:#e9f7ff,stroke:#2684b8,color:#102a3a,stroke-width:1.5px
-  classDef native fill:#ecfdf3,stroke:#2f9d66,color:#123522,stroke-width:1.5px
-  classDef ml fill:#eef2ff,stroke:#6366f1,color:#111827,stroke-width:2px
-  classDef data fill:#fff7ed,stroke:#d97706,color:#3a2206,stroke-width:1px
-  classDef bus fill:none,stroke:#94a3b8,color:#334155,stroke-width:1px
-  classDef external fill:#f3f4f6,stroke:#6b7280,color:#1f2937,stroke-width:1px
-
-  class user person
-  class popup,tracker,category,hygiene browser
-  class collector,classifier native
-  class predictor ml
-  class closedLog,settings,artifacts data
-  class sampleBus,nativeBus,resultBus bus
-  class coreml,chrome external
+  classDef actor fill:#f9f2d7,stroke:#b59b3b,color:#2f2611,stroke-width:1px
+  classDef platform fill:#f3f4f6,stroke:#6b7280,color:#1f2937,stroke-width:1px
+  class user actor
+  class chrome,coreml platform
 ```
 
 两个执行上下文是刻意分开的：

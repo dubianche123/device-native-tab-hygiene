@@ -18,75 +18,78 @@ The core rule is simple:
 
 ```mermaid
 flowchart TB
-  subgraph actors["External actors and platform APIs"]
+  subgraph actors["External Actors & Platforms"]
     direction LR
-    user(["Person<br/>Browser user"])
-    chrome[["🧩 Chrome / Edge APIs<br/>tabs · idle · sessions · system"]]
+    user(["👤 User<br/>Browsing behavior"])
+    chrome[["🧩 Browser APIs<br/>tabs · idle · storage · system"]]
   end
 
   subgraph browser["Container: Chrome / Edge Extension (Manifest V3)"]
-    direction LR
-    popup["🖥️ Popup UI<br/>Modes · Settings · ML console"]
-    tracker["📍 Tab Tracker<br/>Focus · dwell · interactions"]
-    category["🏷️ Category Engine<br/>Domain map · local signals · domain memory"]
-    hygiene["🧹 Hygiene Orchestrator<br/>Check · AI Clean · test tags"]
-    settings[("⚙️ Local Settings<br/>close-time caps · calendar · whitelist")]
-    closedLog[("↩️ Closed Tab Log<br/>restore records")]
+    direction TB
+    subgraph popup["🖥️ Frontend: Popup UI"]
+      p_ui["Interactive Dashboard<br/>ML Console · AI Suggestions"]
+      p_telemetry["Status & Telemetry<br/>CPU / MEM / Power signals"]
+      p_log["Closed Tab Log<br/>Recovery & restore"]
+    end
+
+    subgraph background["⚙️ Backend: Service Worker"]
+      b_tracker["📍 Tab Tracker<br/>Focus · dwell · interactions"]
+      b_learner["🎓 Closure Learner<br/>Manual vs Auto sampling"]
+      b_engine["🏷️ Category Engine<br/>Domain map · memory · signals"]
+      b_orchestrator["🧹 Hygiene Orchestrator<br/>Stale check · AI Cleanup · logic"]
+    end
+
+    subgraph storage["💾 Persistence: chrome.storage.local"]
+      s_registry[("Live Registry<br/>Active tab entries")]
+      s_samples[("Learning Store<br/>Behavioral samples")]
+      s_settings[("User Config<br/>Rules · Whitelist · Blacklist")]
+    end
   end
 
-  subgraph dataflow["IPC and local learning loop"]
-    direction LR
-    sampleBus["Activity samples<br/>tab state · page metadata"]
-    nativeBus["Native Messaging<br/>Protocol v2 JSON over stdio"]
-    resultBus["Predictions · health · classification<br/>idle windows · telemetry"]
+  subgraph ipc["Communication Path"]
+    nativeBus["📬 Native Messaging (V2)<br/>JSON over stdio"]
   end
 
-  subgraph native["Container: macOS Swift Companion"]
-    direction LR
-    collector["📥 Activity Collector<br/>idle state · tab context"]
-    classifier["🔤 Local Page Classifier<br/>NaturalLanguage scoring"]
-    predictor["🧠 The Chronos Engine<br/>9-feature Core ML predictor"]
-    artifacts[("🗄️ Application Support<br/>events · lookup · model metrics")]
+  subgraph native["Container: macOS Swift Companion App"]
+    direction TB
+    n_host["Native Message Host<br/>Event multiplexer"]
+    n_classifier["🔤 NLP Classifier<br/>NaturalLanguage Framework"]
+    n_chronos["🧠 Chronos Engine<br/>9-feature ML Classifier"]
+    n_storage[("🗄️ Native Support<br/>Event history · ML models")]
   end
 
   coreml[["⚡ Apple Core ML Runtime<br/>ANE · GPU · CPU scheduler"]]
 
-  user --> popup
-  chrome --> tracker
-  popup --> hygiene
-  tracker --> category --> hygiene
-  settings --> hygiene
-  hygiene -->|"close · tag · restore"| chrome
-  hygiene --> closedLog
-  tracker --> sampleBus
-  category --> sampleBus
-  sampleBus --> nativeBus --> collector
-  category --> nativeBus --> classifier
-  collector --> artifacts
-  artifacts --> predictor
-  classifier --> predictor
-  predictor <--> coreml
-  predictor --> resultBus --> popup
-  classifier --> resultBus
+  %% Browser Internal Flow
+  user --> p_ui
+  chrome --> b_tracker
+  p_ui <--> background
+  background <--> storage
+  b_tracker --> b_engine
+  b_engine --> b_orchestrator
+  b_learner <--> s_samples
+  b_orchestrator --> chrome
 
+  %% Cross-Container IPC
+  background <--> nativeBus <--> n_host
+  n_host <--> n_classifier
+  n_host <--> n_chronos
+  n_chronos <--> n_storage
+  n_chronos <--> coreml
+
+  %% Styling
   style actors fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px
-  style dataflow fill:none,stroke:#94a3b8,stroke-width:1px
+  style browser fill:#f1f5f9,stroke:#64748b,stroke-width:2px
+  style native fill:#f0fdf4,stroke:#16a34a,stroke-width:2px
+  style popup fill:#ffffff,stroke:#3b82f6,stroke-dasharray: 5 5
+  style background fill:#ffffff,stroke:#3b82f6
+  style storage fill:#fff7ed,stroke:#ea580c
+  style ipc fill:none,stroke:#94a3b8,stroke-dasharray: 2 2
 
-  classDef person fill:#f9f2d7,stroke:#b59b3b,color:#2f2611,stroke-width:1px
-  classDef browser fill:#e9f7ff,stroke:#2684b8,color:#102a3a,stroke-width:1.5px
-  classDef native fill:#ecfdf3,stroke:#2f9d66,color:#123522,stroke-width:1.5px
-  classDef ml fill:#eef2ff,stroke:#6366f1,color:#111827,stroke-width:2px
-  classDef data fill:#fff7ed,stroke:#d97706,color:#3a2206,stroke-width:1px
-  classDef bus fill:none,stroke:#94a3b8,color:#334155,stroke-width:1px
-  classDef external fill:#f3f4f6,stroke:#6b7280,color:#1f2937,stroke-width:1px
-
-  class user person
-  class popup,tracker,category,hygiene browser
-  class collector,classifier native
-  class predictor ml
-  class closedLog,settings,artifacts data
-  class sampleBus,nativeBus,resultBus bus
-  class coreml,chrome external
+  classDef actor fill:#f9f2d7,stroke:#b59b3b,color:#2f2611,stroke-width:1px
+  classDef platform fill:#f3f4f6,stroke:#6b7280,color:#1f2937,stroke-width:1px
+  class user actor
+  class chrome,coreml platform
 ```
 
 The two execution contexts are intentionally split:
