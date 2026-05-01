@@ -1000,16 +1000,20 @@ async function loadClosureLearning() {
         : '';
       const recStr = hasRecommendation
         ? `→ ${formatAge(s.recommendedThresholdMs)}`
-        : `<span class="cl-need-more">need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} useful closes</span>`;
+        : `<span class="cl-need-more">need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} more</span>`;
 
       return `
-        <div class="cl-row">
-          <span class="cl-row__cat" style="color:${color}">${escapeHTML(label)}</span>
-          <span class="cl-row__stat" title="Manual closes (browser + popup)">${s.manualCount} manual</span>
-          <span class="cl-row__stat" title="Auto-cleanup closes">${s.autoCount} auto</span>
-          <span class="cl-row__stat" title="Median foreground dwell of manual closes">dwell ${formatAge(s.manualDwellMs)}</span>
-          <span class="cl-row__stat" title="Median background age of manual closes (time since left foreground)">bg age ${formatAge(s.manualBackgroundAgeMs)}</span>
-          <span class="cl-row__rec" title="Current default: ${formatAge(s.defaultThresholdMs)}">${recStr} ${deltaStr}</span>
+        <div class="cl-card">
+          <div class="cl-card__header">
+            <span class="cl-card__cat" style="color:${color}">${escapeHTML(label)}</span>
+            <span class="cl-card__counts">${s.manualCount}m / ${s.autoCount}a</span>
+            <span class="cl-card__rec">${recStr} ${deltaStr}</span>
+          </div>
+          <div class="cl-card__detail">
+            <span title="Median foreground dwell">⏱ ${formatAge(s.manualDwellMs)}</span>
+            <span title="Median background age">💤 ${formatAge(s.manualBackgroundAgeMs)}</span>
+            <span title="Default threshold">📏 ${formatAge(s.defaultThresholdMs)}</span>
+          </div>
         </div>`;
     }).join('');
 
@@ -1018,11 +1022,7 @@ async function loadClosureLearning() {
       <span>${summary.totalSamples} samples</span>
       <span>${summary.manualCount} manual</span>
       <span>${summary.autoCount} auto</span>
-      <span>${summary.categoriesWithRecommendations}/${summary.categoriesTracked} categories adapted</span>
-    </div>
-    <div class="cl-legend">
-      <span class="cl-legend__item"><span class="cl-legend__swatch" style="background:var(--text-dim,#888)"></span> Manual close (full weight)</span>
-      <span class="cl-legend__item"><span class="cl-legend__swatch" style="background:var(--text-muted,#555)"></span> Auto cleanup (context only)</span>
+      <span>${summary.categoriesWithRecommendations}/${summary.categoriesTracked} adapted</span>
     </div>
     <div class="cl-table">${rows}</div>`;
 }

@@ -52,6 +52,31 @@ function isTrackableUrl(url) {
     && !url.startsWith('file://');
 }
 
+/**
+ * Returns true if the URL is a search engine results page (SERP).
+ * SERPs are opened and closed too quickly to provide useful learning
+ * data — they are transient navigation waypoints, not "real" tabs.
+ * We still track them (registry, dwell, etc.) but exclude them from
+ * closure learning samples.
+ */
+const SERP_PATTERNS = [
+  /^https?:\/\/(www\.)?google\.[a-z.]+\/search/,
+  /^https?:\/\/(www\.)?bing\.com\/search/,
+  /^https?:\/\/search\.yahoo\./,
+  /^https?:\/\/(www\.)?duckduckgo\.com\//,
+  /^https?:\/\/(www\.)?baidu\.com\/s/,
+  /^https?:\/\/(www\.)?sogou\.com\/web/,
+  /^https?:\/\/search\.naver\.com/,
+  /^https?:\/\/(www\.)?ecosia\.org\/search/,
+  /^https?:\/\/(www\.)?startpage\.com\/sp\/search/,
+  /^https?:\/\/yandex\.[a-z.]+\/search/,
+];
+
+function isSearchResultPage(url) {
+  if (!url) return false;
+  return SERP_PATTERNS.some(re => re.test(url));
+}
+
 function markProgrammaticClose(tabId, reason) {
   programmaticCloseReasons.set(Number(tabId), reason);
 }
@@ -182,6 +207,9 @@ async function getProtectedTabIds() {
 
 async function recordTabClosureForLearning(entry, type, now = Date.now()) {
   if (!entry?.url) return;
+  // Skip search engine result pages — they are transient navigation
+  // waypoints that would pollute per-category learned thresholds.
+  if (isSearchResultPage(entry.url)) return;
   await recordClosureSample({
     type,
     category: entry.category || 'other',
