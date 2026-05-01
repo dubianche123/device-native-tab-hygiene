@@ -381,6 +381,8 @@ document.getElementById('btn-force-check').addEventListener('click', async () =>
 async function loadActiveTabs() {
   const registry = await sendMessage({ type: 'getRegistry' });
   const tagged = await sendMessage({ type: 'getTaggedTabs' }) || {};
+  const settings = await sendMessage({ type: 'getSettings' }) || {};
+  const learnedThresholds = await sendMessage({ type: 'getLearnedThresholds' }) || {};
   const list = document.getElementById('active-tab-list');
   const entries = Object.entries(registry || {});
 
@@ -400,10 +402,16 @@ async function loadActiveTabs() {
 
   list.innerHTML = entries.map(([tabId, entry]) => {
     const cat = getCategoryInfo(entry.category);
-    const age = Date.now() - (entry.lastVisited || Date.now());
+    const backgroundAge = entry.lastBackgroundedAt
+      ? Date.now() - entry.lastBackgroundedAt
+      : Date.now() - (entry.lastVisited || Date.now());
+    const isCurrentlyActive = entry.active === true;
     const dwell = liveDwellMs(entry);
-    const maxAge = cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
-    const pct = Math.min(100, (age / maxAge) * 100);
+    const maxAge = settings.customThresholds?.[entry.category]
+      || learnedThresholds[entry.category]
+      || cat.maxAgeMs
+      || DEFAULT_CATEGORY.maxAgeMs;
+    const pct = isCurrentlyActive ? 0 : Math.min(100, (backgroundAge / maxAge) * 100);
     const urgencyClass = pct > 80 ? 'color: var(--danger)' : pct > 50 ? 'color: var(--warning)' : '';
     const favicon = faviconURL(entry);
     const tagInfo = tagged[tabId];
@@ -424,7 +432,7 @@ async function loadActiveTabs() {
         <div class="tab-item__meta">
           <span class="tab-item__badge" style="background:${cat.color}20; color:${cat.color}">${escapeHTML(cat.label)}</span>
           ${tagBadge}
-          <span class="tab-item__age" style="${urgencyClass}">idle ${formatAge(age)} / ${formatAge(maxAge)}</span>
+          <span class="tab-item__age" style="${urgencyClass}">${isCurrentlyActive ? '👁 active' : `bg ${formatAge(backgroundAge)} / ${formatAge(maxAge)}`}</span>
           <span class="tab-item__age">seen ${formatAge(dwell)}</span>
           <button class="btn btn--sm btn-close-tab" data-tab-id="${escapeHTML(tabId)}" title="Close and add to Closed Log">Close &amp; Log</button>
         </div>
@@ -443,6 +451,7 @@ async function loadActiveTabs() {
       btn.textContent = response?.ok ? 'Closed' : 'Failed';
       await loadActiveTabs();
       await loadClosedLog();
+      await loadClosureLearning();
     });
   });
 }
@@ -652,8 +661,8 @@ async function loadClosureLearning() {
           <span class="cl-row__cat" style="color:${color}">${escapeHTML(label)}</span>
           <span class="cl-row__stat" title="Manual closes (browser + popup)">${s.manualCount} manual</span>
           <span class="cl-row__stat" title="Auto-cleanup closes">${s.autoCount} auto</span>
-          <span class="cl-row__stat" title="Median dwell time of manual closes">dwell ${formatAge(s.manualDwellMs)}</span>
-          <span class="cl-row__stat" title="Median idle age of manual closes">age ${formatAge(s.manualAgeMs)}</span>
+          <span class="cl-row__stat" title="Median foreground dwell of manual closes">dwell ${formatAge(s.manualDwellMs)}</span>
+          <span class="cl-row__stat" title="Median background age of manual closes (time since left foreground)">bg age ${formatAge(s.manualBackgroundAgeMs)}</span>
           <span class="cl-row__rec" title="Current default: ${formatAge(s.defaultThresholdMs)}">${recStr} ${deltaStr}</span>
         </div>`;
     }).join('');

@@ -116,7 +116,7 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 
 - **测试 / 部署模式**：测试模式只学习你的浏览规律，并给“本来会被关闭”的标签页打标；部署模式会真正关闭过期标签页，并写入本地 Closed Log。
 - **按类别保留标签页**：AI 工具、工作、金融、邮箱、参考资料、社交、娱乐、购物、新闻、NSFW 和未分类页面都有各自默认保留时间。每个类别都可以在 Settings 里用滑块和数字输入调整，上限 30 天。
-- **手动关闭学习**：你在浏览器里直接关掉标签页，或者在插件 Popup 里使用 Close & Log，都会成为本地学习样本。Neural-Janitor 会用手动关闭前的有效前台停留时间调整类别阈值；自动清理样本只作为上下文记录，避免系统把自己的判断反复强化。
+- **手动关闭学习**：你在浏览器里直接关掉标签页，或者在插件 Popup 里使用 Close & Log，都会成为本地学习样本。Neural-Janitor 会同时学习前台停留时间和离开前台后的背景时间；自动清理样本只作为上下文记录，避免系统把自己的判断反复强化。
 - **AI Tools 独立分类**：ChatGPT、Claude、Gemini、DeepSeek、Hugging Face、Perplexity、Qwen、Kimi、豆包等 AI 网页会进入单独类别，默认保留 30 天。
 - **节假日感知的闲置预测**：Settings 可以选择日本或中国节假日日历。ML Insights 会把未来 7 天标为 Workday、Weekend 或具体节假日 / 长假区间，例如 Golden Week、国庆假期。
 - **AI Cleanup**：插件可以根据内存压力、目标标签页数量、类别优先级、交互次数和闲置时间，自动关闭或标记低重要度标签页。它会保护 AI / 工作类标签页，遵守白名单，也会遵守测试模式。
@@ -151,10 +151,10 @@ Neural-Janitor 让模型承担了更聚焦的任务。它构建了一个 `MLBoos
 2. **Swift Companion App**：一个不可见的 macOS 守护进程，负责聚合行为数据，训练本地 ML 模型，并提供闲置预测和页面分类。
 
 ### 1. 标签页交互追踪器 (Tab Interaction Tracker)
-追踪 `openedAt`（打开时间）、`lastVisited`（最后访问时间）、`dwellMs`（累计前台停留时间）和 `interactions`（交互次数）。当标签页被关闭时，这些指标会被保存在与 `chrome.sessions` 绑定的日志中，以便将其完全恢复到原样。
+追踪 `openedAt`（打开时间）、`lastForegroundAt`（最近进入前台时间）、`lastBackgroundedAt`（最近离开前台时间）、`dwellMs`（累计前台停留时间）和 `interactions`（交互次数）。过期检查使用离开前台后的时间，而不是正在前台浏览的时间。当前 active、pinned、audible 标签页在任何自动关闭前都会被保护。
 
 ### 2. 手动关闭学习器 (Manual Closure Learner)
-浏览器中的真实关闭行为（`Ctrl+W` / 关闭按钮）和插件 Popup 里的关闭行为会被写入 `chrome.storage.local`，样本包含分类、停留时间、闲置年龄、交互次数和关闭时间。学习阈值只使用手动关闭前的有效前台停留样本；过期检查和 AI Cleanup 触发的程序化关闭会被显式排除出浏览器手动关闭路径，只作为自动清理上下文记录。
+浏览器中的真实关闭行为（`Ctrl+W` / 关闭按钮）和插件 Popup 里的关闭行为会被写入 `chrome.storage.local`，样本包含分类、前台停留时间、背景年龄、交互次数和关闭时间。学习阈值优先使用有意义的手动背景年龄样本；如果用户经常在前台看完后直接关闭，则用前台停留时间作为 fallback。过期检查和 AI Cleanup 触发的程序化关闭会被显式排除出浏览器手动关闭路径，只作为自动清理上下文记录。
 
 ### 3. 本地页面分类器 (Local Page Classifier)
 当扩展程序无法自信地对 URL 进行分类时，它会询问伴随程序。伴随程序使用 Apple `NaturalLanguage` 框架对网页标题、描述和内容进行分词，并对照加权分类法进行打分。

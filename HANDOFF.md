@@ -170,16 +170,40 @@ Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
 
 Setting: `testMode` (boolean, default `false`).
 
+## Protected Tabs & Foreground/Background Lifecycle
+
+**Protected tabs** (`getProtectedTabIds()` in background.js): Before any auto-close scan, the system queries Chrome for tabs that must never be closed:
+- Active tab in every window (`active: true` per window)
+- Pinned tabs (`pinned: true`)
+- Audible tabs (`audible: true`)
+- Current active session tab
+
+Both `performStaleCheck()` and `aiCleanup()` skip all protected tab IDs. This prevents closing the tab the user is currently looking at, even if the service worker's session state is stale.
+
+**Foreground/Background lifecycle**:
+- `startActiveSession()`: sets `lastForegroundAt = now` on the tab entry.
+- `closeActiveSession()`: sets `lastBackgroundedAt = now` on the tab entry.
+- `checkpointActiveSession()`: preserves `lastForegroundAt`.
+
+**Stale detection**: `isTabStale()` now receives a background reference timestamp from `backgroundReferenceTime(entry)`, which prefers `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries.
+
+**AI Cleanup scoring**: Uses `backgroundAgeMs` (= `now - lastBackgroundedAt`) for idle penalty, plus `focusRatio = foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs)` to protect heavily-used tabs (+12 score bonus).
+
+**Migration**: Old entries without `lastBackgroundedAt` gracefully fall back to `lastVisited`. New entries get both fields populated.
+
 ## Memory Pressure & AI Cleanup
 
 **Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a very compact model/thread label such as `M3 8T`; keep it short or the popup header will overflow. Color: green (<60%), orange (60–80%), red (≥80%).
 
 **AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
 ```
-score = categoryPriority + log₂(interactions + 1) × 8 - min(72, idleHours) × 1.2
+score = categoryPriority + log₂(interactions + 1) × 8 + focusRatio × 12 - min(72, bgIdleHours) × 1.2
 ```
 - NSFW categories get score -1000 (always closed first).
 - Lower score = more likely to be closed.
+- `bgIdleHours` = hours since tab left foreground (`lastBackgroundedAt`), not since last visit.
+- `focusRatio` = `foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs)` — heavily-used tabs get up to +12 protection.
+- **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
 - High-priority categories such as AI/work are protected; long idle time lowers the score; interactions raise it.
 - Re-checks memory every 5 closures; stops if pressure < target.
 
@@ -214,19 +238,20 @@ Learns from HOW the user closes tabs to dynamically adjust per-category retentio
 
 **Storage**: `closureLearning` key in `chrome.storage.local`. Rolling window of up to 2000 samples.
 
-**Per-sample fields**: `type`, `category`, `dwellMs`, `ageMs`, `interactions`, `openedAt`, `lastVisited`, `closedAt`, `hourOfDay`.
+**Per-sample fields**: `type`, `category`, `dwellMs` (foreground dwell), `backgroundAgeMs` (time since tab left foreground), `interactions`, `openedAt`, `lastVisited`, `lastBackgroundedAt`, `closedAt`, `hourOfDay`.
 
 **Threshold recommendation algorithm**:
-1. Collect manual close dwell values per category.
-2. Ignore zero / near-zero dwell values below 1 minute for threshold recommendations, because those are usually background or bulk tab cleanup.
-3. Compute median meaningful `dwellMs` of manual closes per category.
-4. Recommended threshold = `median_dwell × 1.5`, clamped to `[5 min, 2× default]`.
+1. Collect manual close `backgroundAgeMs` values per category (time since tab left foreground).
+2. Ignore zero / near-zero values below 1 minute — those indicate immediate close, not meaningful retention data.
+3. Compute median meaningful `backgroundAgeMs` of manual closes per category.
+4. Recommended threshold = `median_background_age × 1.5`, clamped to `[5 min, 2× default]`.
 5. Requires ≥ 5 meaningful manual close samples before recommending.
-6. Precedence for `isTabStale()`: user custom thresholds > learned thresholds > default category `maxAgeMs`.
+6. Fallback: if there are not enough meaningful `backgroundAgeMs` samples yet, use meaningful `dwellMs` (foreground dwell) as proxy for active-close patterns.
+7. Precedence for `isTabStale()`: user custom thresholds > learned thresholds > default category `maxAgeMs`.
 
 **Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation.
 
-**Popup UI**: "Closure Learning" section in ML Insights tab shows per-category stats (manual/auto counts, median dwell/age, recommended threshold vs default, delta). Reset button in Settings.
+**Popup UI**: "Closure Learning" section in ML Insights tab shows per-category stats (manual/auto counts, median foreground dwell, median background age, recommended threshold vs default, delta). Reset button in Settings.
 
 **Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `getLearnedThresholds`, `getCategoryClosureStats`, `getLearningSummary`, `resetClosureLearning`.
 
@@ -263,4 +288,6 @@ All 8 JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 - DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.
 - URL paths are never matched against category keywords — this is intentional to prevent false positives.
 - Finalized (2026-05-01): IPC logic is synced for protocol version 2, including per-day `holidayLevels` for prediction requests. Hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is handled with clearly labeled browser heuristic estimates. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are implemented and syntax-verified.
-- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses meaningful manual median dwell time × 1.5 to recommend per-category retention thresholds. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Integrated into `isTabStale()` (learned thresholds between custom and defaults) and popup ML Insights panel.
+- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses median background age × 1.5 to recommend per-category retention thresholds. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Integrated into `isTabStale()` (learned thresholds between custom and defaults) and popup ML Insights panel.
+- Added (2026-05-01): Protected tabs + foreground/background lifecycle. `getProtectedTabIds()` queries Chrome for active/pinned/audible tabs before any auto-close scan — both `performStaleCheck()` and `aiCleanup()` skip them. `lastForegroundAt` / `lastBackgroundedAt` replace `lastVisited` for stale detection (fallback for old entries). AI Cleanup scoring uses `backgroundAgeMs` + `focusRatio` for importance weighting.
+- Adjusted (2026-05-01): `snapshotAllTabs()`, tab creation, tab navigation, popup active-tab display, and AI Suggestions now preserve/use `lastBackgroundedAt` consistently. Suggestions should not count protected tabs as stale.

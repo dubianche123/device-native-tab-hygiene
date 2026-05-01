@@ -77,6 +77,8 @@ function isManualClosure(type) {
  * @param {number} sample.interactions
  * @param {number} sample.openedAt
  * @param {number} sample.lastVisited
+ * @param {number} [sample.backgroundAgeMs] - time since tab left foreground
+ * @param {number} [sample.lastBackgroundedAt] - timestamp when tab left foreground
  */
 export async function recordClosureSample(sample) {
   const data = await getClosureData();
@@ -88,9 +90,11 @@ export async function recordClosureSample(sample) {
     category: sample.category || 'other',
     dwellMs: sample.dwellMs || 0,
     ageMs: sample.ageMs || 0,
+    backgroundAgeMs: sample.backgroundAgeMs ?? null,
     interactions: sample.interactions || 0,
     openedAt: sample.openedAt || now,
     lastVisited: sample.lastVisited || now,
+    lastBackgroundedAt: sample.lastBackgroundedAt || null,
     closedAt: now,
     hourOfDay: new Date().getHours(),
     weight: isManualClosure(type) ? 1 : AUTO_CLEANUP_WEIGHT,
@@ -125,10 +129,10 @@ export async function getCategoryClosureStats() {
     if (!buckets[cat]) {
       buckets[cat] = {
         manualDwell: [],
-        manualAge: [],
+        manualBackgroundAge: [],
         manualInteractions: [],
         autoDwell: [],
-        autoAge: [],
+        autoBackgroundAge: [],
         hourDist: [],
       };
     }
@@ -136,11 +140,15 @@ export async function getCategoryClosureStats() {
 
     if (isManualClosure(s.type)) {
       b.manualDwell.push(s.dwellMs);
-      b.manualAge.push(s.ageMs);
+      // Prefer backgroundAgeMs (time since tab left foreground).
+      // Fallback to ageMs for samples recorded before this field existed.
+      const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
+      b.manualBackgroundAge.push(backgroundAge);
       b.manualInteractions.push(s.interactions);
     } else {
       b.autoDwell.push(s.dwellMs);
-      b.autoAge.push(s.ageMs);
+      const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
+      b.autoBackgroundAge.push(backgroundAge);
     }
     b.hourDist.push(s.hourOfDay);
   }
@@ -153,26 +161,40 @@ export async function getCategoryClosureStats() {
     const autoCount = b.autoDwell.length;
 
     const manualDwellMs = median(b.manualDwell);
-    const manualAgeMs = median(b.manualAge);
+    const manualBackgroundAgeMs = median(b.manualBackgroundAge);
     const manualP25Dwell = percentile(b.manualDwell, 0.25);
-    const manualP25Age = percentile(b.manualAge, 0.25);
+    const manualP25BackgroundAge = percentile(b.manualBackgroundAge, 0.25);
     const autoDwellMs = median(b.autoDwell);
-    const autoAgeMs = median(b.autoAge);
+    const autoBackgroundAgeMs = median(b.autoBackgroundAge);
     const recommendationDwellSamples = b.manualDwell.filter(ms => ms >= MIN_RECOMMEND_DWELL_MS);
+    const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_RECOMMEND_DWELL_MS);
 
-    // Recommended threshold: based on manual close patterns
-    // Use meaningful median foreground dwell × 1.5. Manual closes with
-    // zero/near-zero dwell are usually background tab cleanup, so they are
-    // tracked but do not shrink retention thresholds.
+    // Recommended threshold: based on how long tabs were backgrounded
+    // before the user manually closed them. This directly represents
+    // "how long is this category tolerable in the background".
+    // Use meaningful background age samples — skip near-zero values
+    // which usually indicate the tab was closed immediately.
     let recommendedThresholdMs = null;
     let thresholdDelta = null;
+    const recommendationSampleCount = Math.max(validBackgroundSamples.length, recommendationDwellSamples.length);
 
-    if (recommendationDwellSamples.length >= MIN_MANUAL_SAMPLES) {
-      const recommendationDwellMs = median(recommendationDwellSamples);
+    if (validBackgroundSamples.length >= MIN_MANUAL_SAMPLES) {
+      const medianBackgroundAge = median(validBackgroundSamples);
       recommendedThresholdMs = Math.max(
         5 * 60 * 1000,  // Floor: 5 minutes
         Math.min(
           defaultThreshold * 2,  // Cap: 2x default
+          medianBackgroundAge * 1.5,
+        ),
+      );
+      thresholdDelta = recommendedThresholdMs - defaultThreshold;
+    } else if (recommendationDwellSamples.length >= MIN_MANUAL_SAMPLES) {
+      // Fallback: use foreground dwell if no background age data yet
+      const recommendationDwellMs = median(recommendationDwellSamples);
+      recommendedThresholdMs = Math.max(
+        5 * 60 * 1000,
+        Math.min(
+          defaultThreshold * 2,
           recommendationDwellMs * 1.5,
         ),
       );
@@ -187,14 +209,14 @@ export async function getCategoryClosureStats() {
 
     stats[cat] = {
       manualDwellMs,
-      manualAgeMs,
+      manualBackgroundAgeMs,
       manualP25Dwell,
-      manualP25Age,
+      manualP25BackgroundAge,
       autoDwellMs,
-      autoAgeMs,
+      autoBackgroundAgeMs,
       manualCount,
       autoCount,
-      recommendationSampleCount: recommendationDwellSamples.length,
+      recommendationSampleCount,
       totalSamples: manualCount + autoCount,
       peakClosureHour: peakHour != null ? Number(peakHour) : null,
       recommendedThresholdMs,

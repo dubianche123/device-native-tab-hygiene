@@ -65,8 +65,53 @@ function consumeProgrammaticClose(tabId) {
 }
 
 function closureAgeMs(entry, now = Date.now()) {
-  const reference = entry?.lastVisited || entry?.openedAt || now;
-  return Math.max(0, now - reference);
+  // Prefer lastBackgroundedAt (time since tab left foreground).
+  // Fallback to lastVisited for entries created before this field existed.
+  return Math.max(0, now - backgroundReferenceTime(entry, now));
+}
+
+function backgroundReferenceTime(entry, now = Date.now()) {
+  return entry?.lastBackgroundedAt || entry?.lastVisited || entry?.openedAt || now;
+}
+
+// ── Protected Tabs ───────────────────────────────────────────────────
+
+/**
+ * Build a set of tab IDs that must never be auto-closed.
+ * Includes: active tabs in every window, pinned tabs, audible tabs,
+ * and the current active session tab.
+ */
+async function getProtectedTabIds() {
+  const protected_ = new Set();
+
+  // Active tab in the current active session (fast path)
+  const session = await getActiveSession();
+  if (session?.tabId) protected_.add(session.tabId);
+
+  // All tabs that are currently active in any window, pinned, or audible
+  try {
+    const liveTabs = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    for (const t of liveTabs) protected_.add(t.id);
+
+    // Also protect active tabs in other windows
+    const allWindows = await chrome.windows.getAll({ populate: true });
+    for (const win of allWindows) {
+      if (win.tabs) {
+        for (const t of win.tabs) {
+          if (t.active) protected_.add(t.id);
+          if (t.pinned) protected_.add(t.id);
+          if (t.audible) protected_.add(t.id);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Neural-Janitor] getProtectedTabIds query failed:', err);
+  }
+
+  return protected_;
 }
 
 async function recordTabClosureForLearning(entry, type, now = Date.now()) {
@@ -76,9 +121,11 @@ async function recordTabClosureForLearning(entry, type, now = Date.now()) {
     category: entry.category || 'other',
     dwellMs: entry.dwellMs || 0,
     ageMs: closureAgeMs(entry, now),
+    backgroundAgeMs: entry.lastBackgroundedAt ? Math.max(0, now - entry.lastBackgroundedAt) : null,
     interactions: entry.interactions || 0,
     openedAt: entry.openedAt || now,
     lastVisited: entry.lastVisited || now,
+    lastBackgroundedAt: entry.lastBackgroundedAt || null,
   });
 }
 
@@ -123,6 +170,7 @@ async function closeActiveSession(reason = 'ended') {
       dwellMs: (entry.dwellMs || 0) + duration,
       lastVisited: Math.max(entry.lastVisited || 0, endedAt),
       lastSessionEndedAt: endedAt,
+      lastBackgroundedAt: endedAt,
       active: false,
       activeReason: reason,
     };
@@ -148,6 +196,7 @@ async function checkpointActiveSession(reason = 'checkpoint') {
         dwellMs: (entry.dwellMs || 0) + cappedDuration,
         lastVisited: Math.max(entry.lastVisited || 0, now),
         lastActivatedAt: now,
+        lastForegroundAt: entry.lastForegroundAt || now,
         lastCheckpointAt: now,
         active: true,
         activeReason: reason,
@@ -181,6 +230,7 @@ async function startActiveSession(tab, reason = 'activated') {
     categoryConfidence: cat.confidence,
     lastVisited: now,
     lastActivatedAt: now,
+    lastForegroundAt: now,
     openedAt: prev.openedAt || now,
     dwellMs: prev.dwellMs || 0,
     interactions: prev.interactions || 0,
@@ -298,7 +348,7 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
     closedAt: now,
     reason,
     lastVisited: entry.lastVisited || now,
-    ageMs: now - (entry.lastVisited || now),
+    ageMs: closureAgeMs(entry, now),
     dwellMs: entry.dwellMs || 0,
     interactions: entry.interactions || 0,
   });
@@ -371,6 +421,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // Tab created → add to registry
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (!isTrackableUrl(tab.url)) return;
+  const now = Date.now();
   const cat = categorizePage({ url: tab.url, title: tab.title || '' });
   await upsertTabEntry(tab.id, {
     url: tab.url,
@@ -379,10 +430,13 @@ chrome.tabs.onCreated.addListener(async (tab) => {
     category: cat.key,
     categorySource: cat.source,
     categoryConfidence: cat.confidence,
-    lastVisited: Date.now(),
-    openedAt: Date.now(),
+    lastVisited: now,
+    lastForegroundAt: tab.active ? now : null,
+    lastBackgroundedAt: tab.active ? null : now,
+    openedAt: now,
     dwellMs: 0,
     interactions: 0,
+    active: tab.active === true,
   });
 });
 
@@ -397,6 +451,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     await closeActiveSession('navigation');
   }
   const cat = categorizePage({ url: tab.url, title: tab.title || '' });
+  const now = Date.now();
+  const lastBackgroundedAt = tab.active
+    ? null
+    : (navigated ? now : (prev.lastBackgroundedAt || prev.lastVisited || now));
   await upsertTabEntry(tabId, {
     url: tab.url,
     title: tab.title || '',
@@ -404,10 +462,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     category: cat.key,
     categorySource: cat.source,
     categoryConfidence: cat.confidence,
-    lastVisited: Date.now(),
-    openedAt: navigated ? Date.now() : (prev.openedAt || Date.now()),
+    lastVisited: now,
+    lastForegroundAt: tab.active ? (prev.lastForegroundAt || now) : (prev.lastForegroundAt || null),
+    lastBackgroundedAt,
+    openedAt: navigated ? now : (prev.openedAt || now),
     dwellMs: navigated ? 0 : (prev.dwellMs || 0),
     interactions: navigated ? 0 : (prev.interactions || 0),
+    active: tab.active === true,
   });
   if (tab.active) await startActiveSession(tab, 'navigation');
   await recordBrowserActivity('active', tab);
@@ -497,19 +558,25 @@ async function performStaleCheck() {
   const closeWindowIsQuiet = predictedIdle || currentlyIdle;
   const testMode = settings.testMode === true;
   const learnedThresholds = await getLearnedThresholds();
+  const protectedTabs = await getProtectedTabIds();
 
   // Clear previous tags at the start of each test-mode scan
   if (testMode) await clearAllTags();
 
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
-    if (active?.tabId === tabId) continue;
+
+    // Never close protected tabs (active, pinned, audible in any window)
+    if (protectedTabs.has(tabId)) continue;
 
     // Skip whitelisted URLs
     if (settings.whitelist.some(w => entry.url?.includes(w))) continue;
 
     const categoryKey = entry.category || 'other';
-    const result = isTabStale(entry.lastVisited, categoryKey, settings.customThresholds, learnedThresholds);
+    // Use time since the tab left foreground for stale checks.
+    // Old entries fall back to lastVisited/openedAt.
+    const staleSince = backgroundReferenceTime(entry, now);
+    const result = isTabStale(staleSince, categoryKey, settings.customThresholds, learnedThresholds);
 
     if (!result.stale) continue;
     staleCount++;
@@ -710,29 +777,38 @@ async function aiCleanup() {
   }
 
   const whitelist = Array.isArray(settings.whitelist) ? settings.whitelist : [];
+  const protectedTabs = await getProtectedTabIds();
 
   // Build scored list of closeable tabs
   const candidates = [];
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
-    if (active?.tabId === tabId) continue;
+    // Never close protected tabs (active, pinned, audible in any window)
+    if (protectedTabs.has(tabId)) continue;
     if (whitelist.some(w => entry.url?.includes(w))) continue;
 
     const catInfo = CATEGORIES[entry.category] || {};
     const priority = catInfo.priority ?? 50;
-    const idleMs = now - (entry.lastVisited || now);
-    const idleHours = Math.max(1, idleMs / (1000 * 60 * 60));
+    // Use backgroundAgeMs (time since tab left foreground) for idle penalty
+    const backgroundAgeMs = closureAgeMs(entry, now);
+    const idleHours = Math.max(1, backgroundAgeMs / (1000 * 60 * 60));
     const interactions = Math.max(1, entry.interactions || 0);
 
+    // Foreground ratio: tabs with high foreground/total time are likely important
+    const foregroundDwellMs = entry.dwellMs || 0;
+    const totalAgeMs = foregroundDwellMs + backgroundAgeMs;
+    const focusRatio = totalAgeMs > 0 ? foregroundDwellMs / totalAgeMs : 0;
+    const focusProtection = focusRatio * 12; // up to +12 for heavily-used tabs
+
     // Score: lower = close first. Priority protects important categories;
-    // long idle time lowers the score, interactions raise it.
+    // long background time lowers the score, interactions raise it.
     const interactionProtection = Math.log2(interactions + 1) * 8;
     const idlePenalty = Math.min(72, idleHours) * 1.2;
     const score = entry.category === 'nsfw'
       ? -1000
-      : priority + interactionProtection - idlePenalty;
+      : priority + interactionProtection + focusProtection - idlePenalty;
 
-    candidates.push({ tabId, entry, score, idleMs });
+    candidates.push({ tabId, entry, score, backgroundAgeMs });
   }
 
   // Sort by score ascending (least important first)
@@ -745,7 +821,7 @@ async function aiCleanup() {
 
   if (testMode) await clearAllTags();
 
-  for (const { tabId, entry, idleMs } of candidates) {
+  for (const { tabId, entry, backgroundAgeMs } of candidates) {
     // Stop if both targets are met
     if (currentMem <= targetMemory && currentCount <= targetTabs) break;
 
@@ -780,7 +856,7 @@ async function aiCleanup() {
       closedAt: now,
       reason: 'ai_cleanup',
       lastVisited: entry.lastVisited,
-      ageMs: idleMs,
+      ageMs: backgroundAgeMs,
       dwellMs: entry.dwellMs || 0,
       interactions: entry.interactions || 0,
     });
@@ -875,13 +951,20 @@ async function getAISuggestion() {
 
   // Stale tabs suggestion
   const registry = await getTabRegistry();
-  const active = await getActiveSession();
+  const protectedTabs = await getProtectedTabIds();
+  const learnedThresholds = await getLearnedThresholds();
+  const now = Date.now();
   let staleCount = 0;
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
-    if (active?.tabId === tabId) continue;
+    if (protectedTabs.has(tabId)) continue;
     const cat = entry.category || 'other';
-    const result = isTabStale(entry.lastVisited, cat, settings.customThresholds);
+    const result = isTabStale(
+      backgroundReferenceTime(entry, now),
+      cat,
+      settings.customThresholds,
+      learnedThresholds,
+    );
     if (result.stale) staleCount++;
   }
   if (staleCount > 0) {
@@ -973,9 +1056,14 @@ async function snapshotAllTabs() {
       categorySource: cat.source,
       categoryConfidence: cat.confidence,
       lastVisited: sameUrl ? (prev.lastVisited || now) : now,
+      lastForegroundAt: sameUrl ? (prev.lastForegroundAt || null) : (tab.active ? now : null),
+      lastBackgroundedAt: sameUrl
+        ? (prev.lastBackgroundedAt || (tab.active ? null : (prev.lastVisited || now)))
+        : (tab.active ? null : now),
       openedAt: sameUrl ? (prev.openedAt || now) : now,
       dwellMs: sameUrl ? (prev.dwellMs || 0) : 0,
       interactions: sameUrl ? (prev.interactions || 0) : 0,
+      active: tab.active === true,
     };
     if (sameUrl && prev.lastInteractionAt) entry.lastInteractionAt = prev.lastInteractionAt;
     registry[tab.id] = entry;

@@ -259,9 +259,9 @@ export function getMaxAgeMs(categoryKey, customThresholds = {}, learnedThreshold
  * max idle time and should be closed.
  * @param {object} [learnedThresholds] — { [category]: maxAgeMs } from closure learner
  */
-export function isTabStale(lastVisited, categoryKey, customThresholds = {}, learnedThresholds = {}) {
+export function isTabStale(staleSince, categoryKey, customThresholds = {}, learnedThresholds = {}) {
   const now = Date.now();
-  const ageMs = now - lastVisited;
+  const ageMs = now - staleSince;
   const maxAgeMs = getMaxAgeMs(categoryKey, customThresholds, learnedThresholds);
 
   return {
