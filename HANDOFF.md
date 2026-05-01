@@ -31,8 +31,8 @@ Common metadata sent by JS and returned by Swift:
 JS request types:
 
 - `activity`: records local activity for training.
-- `predict`: returns `idlePredictions` plus nested `health`. JS sends both `holidayLevel` for "now" and `holidayLevels` keyed by day-of-week for the next 7 calendar dates.
-- `health`: returns current model/runtime/hardware telemetry.
+- `predict`: returns `idlePredictions` plus nested `health`. JS sends `holidayLevel` for "now", `holidayLevels` keyed by day-of-week for the next 7 calendar dates, and `idleSchedule` reference windows.
+- `health`: returns current model/runtime/hardware telemetry. JS also sends `idleSchedule` so the confidence curve uses the same reference prior as predictions.
 - `retrain`: forces local Create ML retraining.
 - `classifyURL`: returns local NLP category classification.
 
@@ -152,15 +152,16 @@ Key rule: URL path substrings are **never** matched against category keywords. T
 **Fallback heuristic tiers** (in `idle-detector.js` and Swift companion):
 | Tier | Window | Confidence |
 |------|--------|------------|
-| Holiday | 00:00–09:00 | 0.60 estimate |
-| Weekend | 00:00–08:00 | 0.57 estimate |
-| Weekday | 01:00–07:00 | 0.56 estimate |
+| Holiday | User `idleSchedule.rest` reference window | 0.60 estimate |
+| Weekend | User `idleSchedule.rest` reference window | 0.57 estimate |
+| Weekday | User `idleSchedule.weekday` reference window | 0.56 estimate |
 
 Outside those windows, browser/Swift CPU heuristic confidence stays at `0.18` even when a holiday calendar is selected. The calendar widens likely idle windows; it should not create a blanket daytime +10% confidence jump.
 
 Setting: `holidayCalendar` — `'none'` (default), `'japan'`, or `'china'`.
+Setting: `idleSchedule` — `{ weekday: { sleep, wake }, rest: { sleep, wake } }`, stored as `HH:mm`. Defaults: weekday `01:00` to `07:00`, weekend/holiday `00:00` to `08:30`. It is a reference prior, not a close-time rule.
 
-Important IPC detail: `extension/js/idle-detector.js` builds `holidayLevels` for the next seven actual dates before sending `predict`. Swift's `IdlePredictor.predict(holidayLevel:holidayLevels:)` applies the matching value per day, so a Monday Japanese/Chinese holiday can change that Monday's prediction even when today is not a holiday.
+Important IPC detail: `extension/js/idle-detector.js` builds `holidayLevels` for the next seven actual dates before sending `predict`. Swift's `IdlePredictor.predict(holidayLevel:holidayLevels:idleSchedule:)` applies the matching value per day, so a Monday Japanese/Chinese holiday can change that Monday's prediction even when today is not a holiday. When no Core ML model or lookup exists, Swift returns the appropriate reference schedule window directly instead of the old hardcoded sleep window.
 
 ## Test / Deploy Mode
 

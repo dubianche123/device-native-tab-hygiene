@@ -10,6 +10,7 @@
 
 import { APP_NAME, CATEGORIES, DEFAULT_CATEGORY, HARDWARE_MARKER_STATES } from './constants.js';
 import { getUpcomingHolidays, getRestDayLevel, getHolidayName, getExtendedPeriodLabel } from './holidays.js';
+import { normalizeIdleSchedule } from './idle-schedule.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -419,6 +420,7 @@ function renderMLConsole(status = {}, closureLearning = {}) {
   const samples = document.getElementById('ml-samples');
   const closureSamples = document.getElementById('ml-closure-samples');
   const progress = document.getElementById('ml-progress-fill');
+  const progressValue = document.getElementById('ml-progress-value');
   const trainingStatus = document.getElementById('ml-training-status');
   const computePath = document.getElementById('ml-compute-path');
   const accuracy = document.getElementById('ml-accuracy');
@@ -460,7 +462,13 @@ function renderMLConsole(status = {}, closureLearning = {}) {
       : 'No closure learning data yet.';
   }
 
-  progress.style.width = `${Math.round(Math.max(0, Math.min(1, maturity)) * 100)}%`;
+  const maturityPercent = Math.round(Math.max(0, Math.min(1, maturity)) * 100);
+  progress.style.width = `${maturityPercent}%`;
+  progress.parentElement.title = 'Model readiness: valid idle-model samples compared with the target sample count.';
+  if (progressValue) {
+    progressValue.textContent = `${maturityPercent}%`;
+    progressValue.title = progress.parentElement.title;
+  }
   trainingStatus.textContent = status.readinessReason || status.runtimeLabel || 'Checking local runtime';
   trainingStatus.title = trainingStatus.textContent;
   computePath.textContent = computePathExplanation(status);
@@ -731,6 +739,55 @@ document.getElementById('btn-export').addEventListener('click', async () => {
 
 // ── ML Predictions ───────────────────────────────────────────────────
 
+function renderReferenceSchedule(settings = {}) {
+  const schedule = normalizeIdleSchedule(settings.idleSchedule);
+  const row = (kind, label) => `
+    <div class="reference-schedule__row">
+      <span class="reference-schedule__label">${escapeHTML(label)}</span>
+      <label class="reference-schedule__time">
+        <span>Sleep</span>
+        <input type="time" step="900" value="${escapeHTML(schedule[kind].sleep)}" data-schedule-kind="${kind}" data-schedule-field="sleep">
+      </label>
+      <label class="reference-schedule__time">
+        <span>Wake</span>
+        <input type="time" step="900" value="${escapeHTML(schedule[kind].wake)}" data-schedule-kind="${kind}" data-schedule-field="wake">
+      </label>
+    </div>`;
+
+  return `
+    <div class="reference-schedule">
+      <div class="reference-schedule__head">
+        <span>Reference Schedule</span>
+        <span>Reference only</span>
+      </div>
+      ${row('weekday', 'Workday')}
+      ${row('rest', 'Weekend / Holiday')}
+    </div>`;
+}
+
+function bindReferenceScheduleControls(settings = {}) {
+  const controls = document.querySelectorAll('[data-schedule-kind][data-schedule-field]');
+  if (!controls.length) return;
+
+  controls.forEach((control) => {
+    control.addEventListener('change', async () => {
+      const next = normalizeIdleSchedule(settings.idleSchedule);
+      document.querySelectorAll('[data-schedule-kind][data-schedule-field]').forEach((input) => {
+        const kind = input.dataset.scheduleKind;
+        const field = input.dataset.scheduleField;
+        if (next[kind] && field) next[kind][field] = input.value;
+      });
+
+      await sendMessage({
+        type: 'updateSettings',
+        settings: { idleSchedule: normalizeIdleSchedule(next) },
+      });
+      await loadPredictions();
+      await updateAISuggestions();
+    });
+  });
+}
+
 async function loadPredictions() {
   const predictions = await sendMessage({ type: 'requestPredictions' }) || {};
   await updateMLStatus();
@@ -740,7 +797,9 @@ async function loadPredictions() {
   const calendar = settings.holidayCalendar || 'none';
 
   if (Object.keys(predictions).length === 0) {
-    container.innerHTML = '<div class="empty-state">No predictions available. Start the companion app.</div>';
+    container.innerHTML = '<div class="empty-state">No predictions available. Start the companion app.</div>'
+      + renderReferenceSchedule(settings);
+    bindReferenceScheduleControls(settings);
     return;
   }
 
@@ -797,7 +856,8 @@ async function loadPredictions() {
     }
   }
 
-  container.innerHTML = cards + holidaySection;
+  container.innerHTML = cards + holidaySection + renderReferenceSchedule(settings);
+  bindReferenceScheduleControls(settings);
 }
 
 // ── Closure Learning ─────────────────────────────────────────────────

@@ -6,8 +6,8 @@
  *   2. Retrieve idle-window predictions from the Core ML model
  *   3. Check companion health / model version
  *
- * If the companion is unavailable the module falls back to a simple
- * heuristic: assume the user is idle between 01:00–07:00 every day.
+ * If the companion is unavailable the module falls back to the user's
+ * reference idle schedule.
  */
 
 import {
@@ -19,6 +19,7 @@ import {
 } from './constants.js';
 import { getIdlePredictions, setIdlePredictions, getCompanionStatus, setCompanionStatus, getSettings } from './storage.js';
 import { getRestDayLevel } from './holidays.js';
+import { hourInWindow, referenceWindowForRestLevel, scheduleToIPC, timeToHour } from './idle-schedule.js';
 
 let nativePort = null;
 let companionQueue = Promise.resolve();
@@ -198,7 +199,13 @@ export async function requestPredictions() {
     const now = new Date();
     const holidayLevel = getRestDayLevel(now, calendar);
     const holidayLevels = buildHolidayLevels(calendar, now);
-    const response = await sendToCompanion({ type: 'predict', holidayLevel, holidayLevels });
+    const idleSchedule = scheduleToIPC(settings.idleSchedule);
+    const response = await sendToCompanion({
+      type: 'predict',
+      holidayLevel,
+      holidayLevels,
+      idleSchedule,
+    });
     if (response?.predictions) {
       await setIdlePredictions(response.predictions);
       if (response.modelMode) {
@@ -228,7 +235,11 @@ export async function requestCompanionHealth() {
     const settings = await getSettings();
     const calendar = settings.holidayCalendar || 'none';
     const holidayLevel = getRestDayLevel(new Date(), calendar);
-    const response = await sendToCompanion({ type: 'health', holidayLevel });
+    const response = await sendToCompanion({
+      type: 'health',
+      holidayLevel,
+      idleSchedule: scheduleToIPC(settings.idleSchedule),
+    });
     if (response?.type === 'health') {
       const status = {
         connected: true,
@@ -272,9 +283,8 @@ export async function isInIdleWindow() {
   const settings = await getSettings();
   const calendar = settings.holidayCalendar || 'none';
   const restLevel = getRestDayLevel(now, calendar);
-  if (restLevel === 2) return hour < 9;       // Holiday: idle before 09:00
-  if (restLevel === 1) return hour < 8;       // Weekend: idle before 08:00
-  return hour >= 1 && hour < 7;               // Weekday: idle 01:00–07:00
+  const window = referenceWindowForRestLevel(settings.idleSchedule, restLevel);
+  return hourInWindow(hour, window);
 }
 
 /**
@@ -293,16 +303,17 @@ export async function classifyURL(input) {
 
 // ── Fallback heuristic ────────────────────────────────────────────────
 
-function fallbackHeuristicProbability(hourValue, restLevel) {
+function fallbackHeuristicProbability(hourValue, restLevel, window) {
+  const insideReferenceWindow = hourInWindow(hourValue, window);
   if (restLevel === 2) {
     // Holidays widen the early-morning idle window, but should not add a
     // blanket daytime confidence bump just because a calendar is enabled.
-    return hourValue < 9 ? 0.60 : 0.18;
+    return insideReferenceWindow ? 0.60 : 0.18;
   }
   if (restLevel === 1) {
-    return hourValue < 8 ? 0.57 : 0.18;
+    return insideReferenceWindow ? 0.57 : 0.18;
   }
-  return hourValue >= 1 && hourValue < 7 ? 0.56 : 0.18;
+  return insideReferenceWindow ? 0.56 : 0.18;
 }
 
 async function getFallbackPredictions() {
@@ -315,16 +326,16 @@ async function getFallbackPredictions() {
     const dayOffset = (d - now.getDay() + 7) % 7;
     const target = dateAfterDays(now, dayOffset);
     const restLevel = getRestDayLevel(target, calendar);
+    const window = referenceWindowForRestLevel(settings.idleSchedule, restLevel);
+    const startHour = timeToHour(window.sleep, 1);
+    const endHour = timeToHour(window.wake, 7);
 
     if (restLevel === 2) {
-      // Holiday: wider idle window, higher confidence
-      predictions[d] = { startHour: 0, endHour: 9, confidence: 0.55 };
+      predictions[d] = { startHour, endHour, confidence: 0.55 };
     } else if (restLevel === 1) {
-      // Weekend: slightly wider window
-      predictions[d] = { startHour: 0, endHour: 8, confidence: 0.40 };
+      predictions[d] = { startHour, endHour, confidence: 0.40 };
     } else {
-      // Weekday
-      predictions[d] = { startHour: 1, endHour: 7, confidence: 0.3 };
+      predictions[d] = { startHour, endHour, confidence: 0.3 };
     }
   }
   return predictions;
@@ -420,7 +431,8 @@ async function fallbackConfidenceNow() {
   const settings = await getSettings();
   const calendar = settings.holidayCalendar || 'none';
   const restLevel = getRestDayLevel(now, calendar);
-  return fallbackHeuristicProbability(hour, restLevel);
+  const window = referenceWindowForRestLevel(settings.idleSchedule, restLevel);
+  return fallbackHeuristicProbability(hour, restLevel, window);
 }
 
 async function fallbackConfidenceCurve() {
@@ -433,7 +445,8 @@ async function fallbackConfidenceCurve() {
     const date = new Date(now.getTime() + offsetMinutes * 60_000);
     const hourValue = date.getHours() + date.getMinutes() / 60;
     const restLevel = getRestDayLevel(date, calendar);
-    const confidence = fallbackHeuristicProbability(hourValue, restLevel);
+    const window = referenceWindowForRestLevel(settings.idleSchedule, restLevel);
+    const confidence = fallbackHeuristicProbability(hourValue, restLevel, window);
 
     return {
       offsetMinutes,

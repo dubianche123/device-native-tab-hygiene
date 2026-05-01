@@ -179,6 +179,36 @@ struct IdlePrediction {
     let confidence: Double
 }
 
+struct IdleScheduleWindow {
+    let sleepHour: Double
+    let wakeHour: Double
+
+    func contains(hourValue: Double) -> Bool {
+        let h = hourValue.truncatingRemainder(dividingBy: 24.0)
+        let normalized = h < 0 ? h + 24.0 : h
+        if sleepHour == wakeHour { return false }
+        if sleepHour > wakeHour {
+            return normalized >= sleepHour || normalized < wakeHour
+        }
+        return normalized >= sleepHour && normalized < wakeHour
+    }
+}
+
+struct IdleReferenceSchedule {
+    let weekday: IdleScheduleWindow
+    let rest: IdleScheduleWindow
+
+    static let defaultValue = IdleReferenceSchedule(
+        weekday: IdleScheduleWindow(sleepHour: 1.0, wakeHour: 7.0),
+        rest: IdleScheduleWindow(sleepHour: 0.0, wakeHour: 8.5)
+    )
+
+    func window(day: Int, holidayLevel: Int) -> IdleScheduleWindow {
+        if holidayLevel > 0 || day == 0 || day == 6 { return rest }
+        return weekday
+    }
+}
+
 struct ModelMetrics: Codable {
     var trainingSamples: Int = 0
     var modelAccuracy: Double?
@@ -223,7 +253,11 @@ final class IdlePredictor {
         return "fallback"
     }
 
-    func predict(holidayLevel: Int = 0, holidayLevels: [Int: Int] = [:]) -> [IdlePrediction] {
+    func predict(
+        holidayLevel: Int = 0,
+        holidayLevels: [Int: Int] = [:],
+        idleSchedule: IdleReferenceSchedule = .defaultValue
+    ) -> [IdlePrediction] {
         maybeTrainIfNeeded()
         lastInferenceAt = Date()
         inferenceCount += 1
@@ -232,10 +266,28 @@ final class IdlePredictor {
         let eventsForPrediction = store.all()
         for day in 0..<7 {
             let dayHolidayLevel = holidayLevels[day] ?? holidayLevel
+            let referenceWindow = idleSchedule.window(day: day, holidayLevel: dayHolidayLevel)
+            if model == nil && lookup.isEmpty {
+                predictions.append(IdlePrediction(
+                    day: day,
+                    startHour: referenceWindow.sleepHour,
+                    endHour: referenceWindow.wakeHour,
+                    confidence: dayHolidayLevel >= 2 ? 0.55 : (dayHolidayLevel >= 1 ? 0.40 : 0.30)
+                ))
+                continue
+            }
+
             var samples: [(hour: Double, prob: Double)] = []
             for hour in 0..<24 {
                 for minute in stride(from: 0, to: 60, by: 15) {
-                    let prob = probability(day: day, hour: hour, minute: minute, events: eventsForPrediction, holidayLevel: dayHolidayLevel)
+                    let prob = probability(
+                        day: day,
+                        hour: hour,
+                        minute: minute,
+                        events: eventsForPrediction,
+                        holidayLevel: dayHolidayLevel,
+                        idleSchedule: idleSchedule
+                    )
                     samples.append((Double(hour) + Double(minute) / 60.0, prob))
                 }
             }
@@ -249,11 +301,12 @@ final class IdlePredictor {
                     confidence: best.avgConfidence
                 ))
             } else {
-                // If no contiguous block above threshold, check the heuristic
-                // Use a default window for the day based on heuristic
-                let hStart = dayHolidayLevel >= 2 ? 0.0 : (dayHolidayLevel >= 1 ? 0.0 : 1.0)
-                let hEnd = dayHolidayLevel >= 2 ? 9.0 : (dayHolidayLevel >= 1 ? 8.0 : 7.0)
-                predictions.append(IdlePrediction(day: day, startHour: hStart, endHour: hEnd, confidence: 0.25))
+                predictions.append(IdlePrediction(
+                    day: day,
+                    startHour: referenceWindow.sleepHour,
+                    endHour: referenceWindow.wakeHour,
+                    confidence: 0.25
+                ))
             }
         }
         return predictions
@@ -288,7 +341,11 @@ final class IdlePredictor {
         writeLog("Idle predictor trained via Create ML and loaded through Core ML")
     }
 
-    func healthPayload(activityCount: Int, holidayLevel: Int = 0) -> [String: Any] {
+    func healthPayload(
+        activityCount: Int,
+        holidayLevel: Int = 0,
+        idleSchedule: IdleReferenceSchedule = .defaultValue
+    ) -> [String: Any] {
         let shouldRefreshMetrics = lastMetricsRefresh
             .map { Date().timeIntervalSince($0) > 15 * 60 } ?? true
         if shouldRefreshMetrics {
@@ -296,7 +353,7 @@ final class IdlePredictor {
         }
 
         let usingCoreML = model != nil
-        let decision = decisionSnapshot(holidayLevel: holidayLevel)
+        let decision = decisionSnapshot(holidayLevel: holidayLevel, idleSchedule: idleSchedule)
         let trainingSamples = metrics.trainingSamples
         let maturity = min(1.0, Double(trainingSamples) / 1_000.0)
         let devices = localDeviceStatus(usingCoreML: usingCoreML)
@@ -449,44 +506,85 @@ final class IdlePredictor {
         }
     }
 
-    private func probability(day: Int, hour: Int, minute: Int, events: [ActivityEvent], holidayLevel: Int = 0) -> Double {
+    private func probability(
+        day: Int,
+        hour: Int,
+        minute: Int,
+        events: [ActivityEvent],
+        holidayLevel: Int = 0,
+        idleSchedule: IdleReferenceSchedule = .defaultValue
+    ) -> Double {
         let base: Double
         if let model = model {
             base = runInference(model: model, features: predictionFeatures(day: day, hour: hour, minute: minute, events: events))
-            return restAdjustedProbability(base, hour: hour, minute: minute, holidayLevel: holidayLevel)
+            return restAdjustedProbability(
+                base,
+                day: day,
+                hour: hour,
+                minute: minute,
+                holidayLevel: holidayLevel,
+                idleSchedule: idleSchedule
+            )
         }
         
         if let prob = lookup["\(day)_\(hour)"] {
             base = prob
-            return restAdjustedProbability(base, hour: hour, minute: minute, holidayLevel: holidayLevel)
+            return restAdjustedProbability(
+                base,
+                day: day,
+                hour: hour,
+                minute: minute,
+                holidayLevel: holidayLevel,
+                idleSchedule: idleSchedule
+            )
         }
         
-        return heuristicProbability(hour: hour, minute: minute, holidayLevel: holidayLevel)
+        return heuristicProbability(day: day, hour: hour, minute: minute, holidayLevel: holidayLevel, idleSchedule: idleSchedule)
     }
 
-    private func heuristicProbability(hour: Int, minute: Int, holidayLevel: Int = 0) -> Double {
+    private func heuristicProbability(
+        day: Int = 1,
+        hour: Int,
+        minute: Int,
+        holidayLevel: Int = 0,
+        idleSchedule: IdleReferenceSchedule = .defaultValue
+    ) -> Double {
         let h = Double(hour) + Double(minute) / 60.0
+        let insideReferenceWindow = idleSchedule.window(day: day, holidayLevel: holidayLevel).contains(hourValue: h)
         if holidayLevel >= 2 {
             // Holidays widen the early-morning idle window, but do not add a
             // blanket daytime confidence bump just because a calendar is enabled.
-            return h < 9.0 ? 0.60 : 0.18
+            return insideReferenceWindow ? 0.60 : 0.18
         } else if holidayLevel >= 1 {
-            return h < 8.0 ? 0.57 : 0.18
+            return insideReferenceWindow ? 0.57 : 0.18
         } else {
-            return (hour >= 1 && hour < 7) ? 0.56 : 0.18
+            return insideReferenceWindow ? 0.56 : 0.18
         }
     }
 
-    private func restAdjustedProbability(_ base: Double, hour: Int, minute: Int, holidayLevel: Int = 0) -> Double {
-        guard holidayLevel > 0 else { return clamp(base) }
+    private func restAdjustedProbability(
+        _ base: Double,
+        day: Int,
+        hour: Int,
+        minute: Int,
+        holidayLevel: Int = 0,
+        idleSchedule: IdleReferenceSchedule = .defaultValue
+    ) -> Double {
         let h = Double(hour) + Double(minute) / 60.0
+        let insideReferenceWindow = idleSchedule.window(day: day, holidayLevel: holidayLevel).contains(hourValue: h)
         if holidayLevel >= 2 {
-            return clamp(base + (h < 9.0 ? 0.08 : -0.02))
+            return clamp(base + (insideReferenceWindow ? 0.08 : -0.02))
         }
-        return clamp(base + (h < 8.0 ? 0.04 : -0.01))
+        if holidayLevel >= 1 {
+            return clamp(base + (insideReferenceWindow ? 0.04 : -0.01))
+        }
+        return clamp(base + (insideReferenceWindow ? 0.02 : 0.0))
     }
 
-    private func decisionSnapshot(holidayLevel: Int = 0) -> [String: Any] {
+    private func decisionSnapshot(
+        holidayLevel: Int = 0,
+        idleSchedule: IdleReferenceSchedule = .defaultValue
+    ) -> [String: Any] {
         let events = store.all()
         let calendar = Calendar.current
         let now = Date()
@@ -494,7 +592,14 @@ final class IdlePredictor {
         let day = (comps.weekday ?? 1) - 1
         let hour = comps.hour ?? 0
         let minute = comps.minute ?? 0
-        let current = probability(day: day, hour: hour, minute: minute, events: events, holidayLevel: holidayLevel)
+        let current = probability(
+            day: day,
+            hour: hour,
+            minute: minute,
+            events: events,
+            holidayLevel: holidayLevel,
+            idleSchedule: idleSchedule
+        )
 
         var curve: [[String: Any]] = []
         for offset in stride(from: 0, through: 180, by: 30) {
@@ -507,7 +612,14 @@ final class IdlePredictor {
                 "offsetMinutes": offset,
                 "hour": h,
                 "minute": m,
-                "confidence": probability(day: d, hour: h, minute: m, events: events, holidayLevel: holidayLevel),
+                "confidence": probability(
+                    day: d,
+                    hour: h,
+                    minute: m,
+                    events: events,
+                    holidayLevel: holidayLevel,
+                    idleSchedule: idleSchedule
+                ),
             ])
         }
 
@@ -1016,6 +1128,36 @@ func intFromJSON(_ value: Any?) -> Int? {
     return nil
 }
 
+func hourFromJSONTime(_ value: Any?, fallback: Double) -> Double {
+    if let numberValue = value as? NSNumber {
+        return max(0.0, min(23.99, numberValue.doubleValue))
+    }
+    guard let text = value as? String else { return fallback }
+    let parts = text.split(separator: ":")
+    guard parts.count == 2,
+          let hour = Int(parts[0]),
+          let minute = Int(parts[1]),
+          hour >= 0, hour <= 23,
+          minute >= 0, minute <= 59 else { return fallback }
+    return Double(hour) + Double(minute) / 60.0
+}
+
+func scheduleWindowFromJSON(_ value: Any?, fallback: IdleScheduleWindow) -> IdleScheduleWindow {
+    guard let dict = value as? [String: Any] else { return fallback }
+    return IdleScheduleWindow(
+        sleepHour: hourFromJSONTime(dict["sleep"], fallback: fallback.sleepHour),
+        wakeHour: hourFromJSONTime(dict["wake"], fallback: fallback.wakeHour)
+    )
+}
+
+func idleScheduleFromJSON(_ value: Any?) -> IdleReferenceSchedule {
+    guard let dict = value as? [String: Any] else { return .defaultValue }
+    return IdleReferenceSchedule(
+        weekday: scheduleWindowFromJSON(dict["weekday"], fallback: IdleReferenceSchedule.defaultValue.weekday),
+        rest: scheduleWindowFromJSON(dict["rest"], fallback: IdleReferenceSchedule.defaultValue.rest)
+    )
+}
+
 func holidayLevelMap(from value: Any?) -> [Int: Int] {
     if let dict = value as? [String: Any] {
         var parsed: [Int: Int] = [:]
@@ -1085,7 +1227,12 @@ while true {
     case "predict":
         let holidayLevel = intFromJSON(message["holidayLevel"]) ?? 0
         let holidayLevels = holidayLevelMap(from: message["holidayLevels"])
-        let predictions = predictor.predict(holidayLevel: holidayLevel, holidayLevels: holidayLevels)
+        let idleSchedule = idleScheduleFromJSON(message["idleSchedule"])
+        let predictions = predictor.predict(
+            holidayLevel: holidayLevel,
+            holidayLevels: holidayLevels,
+            idleSchedule: idleSchedule
+        )
         var predDict: [String: Any] = [:]
         for pred in predictions {
             predDict["\(pred.day)"] = [
@@ -1102,7 +1249,11 @@ while true {
             "predictions": predDict,
             "modelMode": predictor.mode,
             "activityCount": store.count,
-            "health": predictor.healthPayload(activityCount: store.count, holidayLevel: holidayLevel),
+            "health": predictor.healthPayload(
+                activityCount: store.count,
+                holidayLevel: holidayLevel,
+                idleSchedule: idleSchedule
+            ),
         ])
 
     case "retrain":
@@ -1129,7 +1280,12 @@ while true {
 
     case "health":
         let holidayLevel = intFromJSON(message["holidayLevel"]) ?? 0
-        var payload = predictor.healthPayload(activityCount: store.count, holidayLevel: holidayLevel)
+        let idleSchedule = idleScheduleFromJSON(message["idleSchedule"])
+        var payload = predictor.healthPayload(
+            activityCount: store.count,
+            holidayLevel: holidayLevel,
+            idleSchedule: idleSchedule
+        )
         payload["version"] = "1.0.0"
         writeMessage(payload)
 

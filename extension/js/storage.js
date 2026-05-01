@@ -6,6 +6,7 @@
  */
 
 import { STORAGE_KEYS } from './constants.js';
+import { DEFAULT_IDLE_SCHEDULE, normalizeIdleSchedule } from './idle-schedule.js';
 
 function tabKey(tabId) {
   return `${STORAGE_KEYS.TAB_ENTRY_PREFIX}${tabId}`;
@@ -192,22 +193,48 @@ const DEFAULT_SETTINGS = {
   useCompanion: true,
   whitelist: [],
   holidayCalendar: 'none',
+  idleSchedule: DEFAULT_IDLE_SCHEDULE,
   testMode: false,
   aiCleanupTargetMemory: 70,
   aiCleanupTargetTabs: 30,
   aiForceCleanupThreshold: 85,
 };
 
+function mergeIdleSchedule(current, next) {
+  return normalizeIdleSchedule({
+    weekday: {
+      ...(current?.weekday || {}),
+      ...(next?.weekday || {}),
+    },
+    rest: {
+      ...(current?.rest || {}),
+      ...(next?.rest || {}),
+    },
+  });
+}
+
+function normalizeSettings(settings = {}) {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    idleSchedule: normalizeIdleSchedule(settings.idleSchedule || DEFAULT_IDLE_SCHEDULE),
+  };
+}
+
 export async function getSettings() {
   const data = await chrome.storage.local.get(STORAGE_KEYS.USER_SETTINGS);
-  return { ...DEFAULT_SETTINGS, ...(data[STORAGE_KEYS.USER_SETTINGS] || {}) };
+  return normalizeSettings(data[STORAGE_KEYS.USER_SETTINGS] || {});
 }
 
 export async function updateSettings(partial) {
   const current = await getSettings();
   const merged = { ...current, ...partial };
-  await chrome.storage.local.set({ [STORAGE_KEYS.USER_SETTINGS]: merged });
-  return merged;
+  if (partial?.idleSchedule) {
+    merged.idleSchedule = mergeIdleSchedule(current.idleSchedule, partial.idleSchedule);
+  }
+  const normalized = normalizeSettings(merged);
+  await chrome.storage.local.set({ [STORAGE_KEYS.USER_SETTINGS]: normalized });
+  return normalized;
 }
 
 // ── Return Notification State ─────────────────────────────────────────
