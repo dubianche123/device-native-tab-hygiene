@@ -40,13 +40,12 @@ flowchart TB
 
   subgraph browser["<span style='color:#3b82f6'>容器：Chrome / Edge 扩展 (Manifest V3)</span>"]
     direction TB
-    subgraph popup["<span style='color:#3b82f6'>前端：弹窗 UI</span>"]
-      p_ui["交互式仪表盘<br/>ML 控制台 · AI 建议"]
-      p_telemetry["状态与遥测<br/>CPU / 内存 / 功耗信号"]
-      p_log["已关闭标签日志<br/>恢复与记录"]
+    subgraph frontend["<span style='color:#3b82f6'>前端与服务层</span>"]
+      p_ui["🖥️ 弹窗 UI<br/>ML 控制台 · AI 建议"]
+      p_telemetry["📈 状态与遥测<br/>CPU / 内存 / 功耗信号"]
     end
 
-    subgraph background["<span style='color:#3b82f6'>后端：服务工作线程</span>"]
+    subgraph background["<span style='color:#3b82f6'>后端逻辑：服务工作线程</span>"]
       b_tracker["📍 标签追踪器<br/>焦点 · 停留 · 交互"]
       b_learner["🎓 关闭学习器<br/>手动 vs 自动采样"]
       b_engine["🏷️ 类别引擎<br/>域名映射 · 记忆 · 信号"]
@@ -55,8 +54,9 @@ flowchart TB
 
     subgraph storage["<span style='color:#f59e0b'>持久化：chrome.storage.local</span>"]
       s_registry[("实时注册表<br/>活跃标签页条目")]
-      s_samples[("学习存储<br/>行为样本")]
+      s_samples[("学习存储器<br/>行为样本")]
       s_settings[("用户配置<br/>规则 · 白名单 · 黑名单")]
+      s_log[("已关闭标签日志<br/>恢复与记录")]
     end
   end
 
@@ -74,18 +74,29 @@ flowchart TB
 
   coreml[["⚡ Apple Core ML 运行时<br/>ANE · GPU · CPU 调度"]]
 
-  %% 浏览器内部流
+  %% 逻辑流 - 减少交叉
   user --> p_ui
   chrome --> b_tracker
-  p_ui <--> background
-  background <--> storage
-  b_tracker --> b_engine
-  b_engine --> b_orchestrator
+  
+  %% 追踪器 -> 注册表
+  b_tracker -- "更新状态" --> s_registry
+  
+  %% 学习器 <-> 样本
   b_learner <--> s_samples
-  b_orchestrator --> chrome
+  
+  %% 引擎与调度器流程
+  b_engine -- "分类" --> b_orchestrator
+  b_orchestrator -- "读取规则" --> s_settings
+  b_orchestrator -- "记录事件" --> s_log
+  b_orchestrator -- "关闭/标记" --> chrome
+
+  %% UI 流程
+  p_ui <--> s_settings
+  p_ui <--> s_log
+  p_ui -- "手动触发" --> b_orchestrator
 
   %% 跨容器 IPC
-  background <--> nativeBus <--> n_host
+  b_engine <--> nativeBus <--> n_host
   n_host <--> n_classifier
   n_host <--> n_chronos
   n_chronos <--> n_storage

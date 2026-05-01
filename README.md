@@ -40,13 +40,12 @@ flowchart TB
 
   subgraph browser["<span style='color:#3b82f6'>Container: Chrome / Edge Extension (Manifest V3)</span>"]
     direction TB
-    subgraph popup["<span style='color:#3b82f6'>Frontend: Popup UI</span>"]
-      p_ui["Interactive Dashboard<br/>ML Console · AI Suggestions"]
-      p_telemetry["Status & Telemetry<br/>CPU / MEM / Power signals"]
-      p_log["Closed Tab Log<br/>Recovery & restore"]
+    subgraph frontend["<span style='color:#3b82f6'>Frontend & Service Layer</span>"]
+      p_ui["🖥️ Popup UI<br/>ML Console · AI Suggestions"]
+      p_telemetry["📈 Status & Telemetry<br/>CPU / MEM / Power signals"]
     end
 
-    subgraph background["<span style='color:#3b82f6'>Backend: Service Worker</span>"]
+    subgraph background["<span style='color:#3b82f6'>Background Logic: Service Worker</span>"]
       b_tracker["📍 Tab Tracker<br/>Focus · dwell · interactions"]
       b_learner["🎓 Closure Learner<br/>Manual vs Auto sampling"]
       b_engine["🏷️ Category Engine<br/>Domain map · memory · signals"]
@@ -57,6 +56,7 @@ flowchart TB
       s_registry[("Live Registry<br/>Active tab entries")]
       s_samples[("Learning Store<br/>Behavioral samples")]
       s_settings[("User Config<br/>Rules · Whitelist · Blacklist")]
+      s_log[("Closed Tab Log<br/>Recovery & restore")]
     end
   end
 
@@ -74,18 +74,29 @@ flowchart TB
 
   coreml[["⚡ Apple Core ML Runtime<br/>ANE · GPU · CPU scheduler"]]
 
-  %% Browser Internal Flow
+  %% Logical Flow - Minimized Crossing
   user --> p_ui
   chrome --> b_tracker
-  p_ui <--> background
-  background <--> storage
-  b_tracker --> b_engine
-  b_engine --> b_orchestrator
+  
+  %% Tracker -> Registry
+  b_tracker -- "Update state" --> s_registry
+  
+  %% Learner <-> Samples
   b_learner <--> s_samples
-  b_orchestrator --> chrome
+  
+  %% Engine & Orchestrator Flow
+  b_engine -- "Classify" --> b_orchestrator
+  b_orchestrator -- "Read rules" --> s_settings
+  b_orchestrator -- "Log events" --> s_log
+  b_orchestrator -- "Close/Tag" --> chrome
+
+  %% UI Flow
+  p_ui <--> s_settings
+  p_ui <--> s_log
+  p_ui -- "Trigger" --> b_orchestrator
 
   %% Cross-Container IPC
-  background <--> nativeBus <--> n_host
+  b_engine <--> nativeBus <--> n_host
   n_host <--> n_classifier
   n_host <--> n_chronos
   n_chronos <--> n_storage
