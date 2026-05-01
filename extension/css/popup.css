@@ -174,8 +174,8 @@ body {
 .mode-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
+  gap: 6px;
+  padding: 6px 8px;
   background: var(--bg-card);
   border-radius: var(--radius);
   margin-bottom: 10px;
@@ -191,7 +191,7 @@ body {
 }
 
 .mode-toggle__btn {
-  padding: 4px 10px;
+  padding: 4px 8px;
   font-size: 11px;
   font-weight: 600;
   border: none;
@@ -215,13 +215,13 @@ body {
 .memory-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex: 1;
   min-width: 0;
 }
 
 .memory-bar--cpu {
-  flex: 1.15;
+  flex: 1.08;
 }
 
 .memory-bar__label {
@@ -239,7 +239,7 @@ body {
   background: var(--surface);
   border-radius: 3px;
   overflow: hidden;
-  min-width: 40px;
+  min-width: 28px;
 }
 
 .memory-bar__fill {
@@ -253,13 +253,13 @@ body {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
-  min-width: 32px;
+  min-width: 28px;
   text-align: right;
   flex-shrink: 0;
 }
 
 .memory-bar__detail {
-  max-width: 58px;
+  max-width: 36px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -267,6 +267,7 @@ body {
   font-weight: 600;
   color: var(--text-muted);
   flex-shrink: 0;
+  text-align: right;
 }
 
 /* ── Status Bar ─────────────────────────────────────────────────── */
@@ -779,7 +780,14 @@ body {
   margin-bottom: 4px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
+  min-width: 0;
+}
+
+.prediction-card__date {
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .prediction-card__window {
@@ -813,6 +821,11 @@ body {
   border-radius: 8px;
   font-weight: 600;
   letter-spacing: 0;
+  max-width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .prediction-card__badge--holiday {
@@ -823,6 +836,11 @@ body {
 .prediction-card__badge--weekend {
   background: rgba(241, 196, 15, 0.15);
   color: #f1c40f;
+}
+
+.prediction-card__badge--weekday {
+  background: rgba(136, 146, 164, 0.12);
+  color: var(--text-muted);
 }
 
 .upcoming-holidays {

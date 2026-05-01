@@ -9,7 +9,7 @@
  */
 
 import { APP_NAME, CATEGORIES, DEFAULT_CATEGORY, HARDWARE_MARKER_STATES } from './constants.js';
-import { getUpcomingHolidays, getRestDayLevel, getHolidayName } from './holidays.js';
+import { getUpcomingHolidays, getRestDayLevel, getHolidayName, getExtendedPeriodLabel } from './holidays.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -50,6 +50,10 @@ function formatClock(hour, minute) {
   return `${String(hour).padStart(2, '0')}:${String(minute || 0).padStart(2, '0')}`;
 }
 
+function formatPredictionDate(date) {
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 function shortCPUModel(model) {
   const clean = String(model || 'CPU')
     .replace(/\(R\)|\(TM\)/g, '')
@@ -57,8 +61,10 @@ function shortCPUModel(model) {
     .replace(/\s+/g, ' ')
     .trim();
   const apple = clean.match(/Apple M\d+(?:\s(?:Pro|Max|Ultra))?/i);
-  if (apple) return apple[0];
-  return clean.split(' ').slice(0, 3).join(' ') || 'CPU';
+  if (apple) return apple[0].replace(/^Apple\s+/i, '');
+  const intel = clean.match(/(?:Intel\s+)?(?:Core\s+)?i[3579](?:-\d+)?/i);
+  if (intel) return intel[0].replace(/^Intel\s+/i, '');
+  return clean.split(' ').slice(0, 2).join(' ') || 'CPU';
 }
 
 function getCategoryInfo(key) {
@@ -254,7 +260,8 @@ function renderMLConsole(status = {}) {
   const decision = document.getElementById('decision-headline');
   const power = document.getElementById('power-light');
 
-  const trainingSamples = status.trainingSamples || status.activityCount || 0;
+  const trainingSamples = status.trainingSamples || 0;
+  const activityCount = status.activityCount || 0;
   const targetSamples = status.targetTrainingSamples || 1000;
   const minimumSamples = status.minimumTrainingSamples || 100;
   const maturity = typeof status.modelMaturity === 'number'
@@ -263,19 +270,17 @@ function renderMLConsole(status = {}) {
 
   link.textContent = status.connected ? 'Connected' : 'Disconnected';
   link.style.color = status.connected ? 'var(--success)' : 'var(--danger)';
-  const isAwaitingVariety = !status.modelLoaded && trainingSamples >= minimumSamples;
-  const displaySamples = isAwaitingVariety ? minimumSamples - 1 : trainingSamples;
+  if (status.modelLoaded) {
+    samples.textContent = `${trainingSamples.toLocaleString()} / ${targetSamples.toLocaleString()}`;
+  } else if (trainingSamples > 0) {
+    samples.textContent = `${trainingSamples.toLocaleString()} / ${minimumSamples.toLocaleString()} valid`;
+  } else if (activityCount > 0) {
+    samples.textContent = `0 valid (${activityCount.toLocaleString()} events)`;
+  } else {
+    samples.textContent = `0 / ${minimumSamples.toLocaleString()} valid`;
+  }
 
-  samples.textContent = status.modelLoaded
-    ? `${trainingSamples.toLocaleString()} / ${targetSamples.toLocaleString()}`
-    : isAwaitingVariety
-      ? `${displaySamples.toLocaleString()} / ${minimumSamples.toLocaleString()} (Needs idle data)`
-      : `${displaySamples.toLocaleString()} / ${minimumSamples.toLocaleString()} for Core ML`;
-  
-  const displayMaturity = isAwaitingVariety 
-    ? (minimumSamples - 1) / minimumSamples 
-    : maturity;
-  progress.style.width = `${Math.round(Math.max(0, Math.min(1, displayMaturity)) * 100)}%`;
+  progress.style.width = `${Math.round(Math.max(0, Math.min(1, maturity)) * 100)}%`;
   trainingStatus.textContent = status.readinessReason || status.runtimeLabel || 'Checking local runtime';
   trainingStatus.title = trainingStatus.textContent;
   computePath.textContent = computePathExplanation(status);
@@ -344,12 +349,18 @@ document.getElementById('btn-force-check').addEventListener('click', async () =>
   btn.textContent = 'Checking';
   const response = await sendMessage({ type: 'forceCheck' });
   const closed = response?.closedCount || 0;
+  const tagged = response?.taggedCount || 0;
   btn.textContent = closed > 0 ? `Closed ${closed}` : 'Checked';
   statusText.textContent = response?.disabled
     ? 'Auto-cleanup is disabled'
-    : `Checked ${response?.scannedCount ?? 0} tabs, closed ${closed}`;
+    : tagged > 0
+      ? `Checked ${response?.scannedCount ?? 0}, tagged ${tagged}`
+      : `Checked ${response?.scannedCount ?? 0}, closed ${closed}`;
   await loadActiveTabs();
   await loadClosedLog();
+  await updateMemoryPressure();
+  await updateCPUUsage();
+  await updateAISuggestions();
   setTimeout(() => {
     btn.disabled = false;
     btn.textContent = 'Check';
@@ -539,36 +550,42 @@ async function loadPredictions() {
   const settings = await sendMessage({ type: 'getSettings' }) || {};
   const calendar = settings.holidayCalendar || 'none';
 
-  const entries = Object.entries(predictions);
-  if (entries.length === 0) {
+  if (Object.keys(predictions).length === 0) {
     container.innerHTML = '<div class="empty-state">No predictions available. Start the companion app.</div>';
     return;
   }
 
   const now = new Date();
 
-  const cards = entries.map(([day, pred]) => {
-    const startH = Math.floor(pred.startHour);
-    const startM = Math.round((pred.startHour % 1) * 60);
-    const endH = Math.floor(pred.endHour);
-    const endM = Math.round((pred.endHour % 1) * 60);
+  const cards = Array.from({ length: 7 }, (_, dayOffset) => {
+    const target = new Date(now);
+    target.setDate(now.getDate() + dayOffset);
+    const day = String(target.getDay());
+    const pred = predictions[day] || {};
+    const startHour = typeof pred.startHour === 'number' ? pred.startHour : 1;
+    const endHour = typeof pred.endHour === 'number' ? pred.endHour : 7;
+    const startH = Math.floor(startHour);
+    const startM = Math.round((startHour % 1) * 60);
+    const endH = Math.floor(endHour);
+    const endM = Math.round((endHour % 1) * 60);
     const conf = Math.round((pred.confidence || 0) * 100);
-
-    // Compute the actual date for this day-of-week
-    const dayOffset = ((parseInt(day) - now.getDay()) + 7) % 7;
-    const target = new Date(now.getTime() + dayOffset * 86_400_000);
     const restLevel = getRestDayLevel(target, calendar);
 
-    const hName = getHolidayName(target, calendar);
+    const hName = getHolidayName(target, calendar) || getExtendedPeriodLabel(target, calendar);
     const badge = restLevel === 2
-      ? `<span class="prediction-card__badge prediction-card__badge--holiday" title="${escapeHTML(hName || 'Holiday')}">🎌 ${escapeHTML(hName || 'Holiday')}</span>`
+      ? `<span class="prediction-card__badge prediction-card__badge--holiday" title="${escapeHTML(hName || 'Holiday')}">${escapeHTML(hName || 'Holiday')}</span>`
       : restLevel === 1
-        ? '<span class="prediction-card__badge prediction-card__badge--weekend">☀ Weekend</span>'
-        : '';
+        ? '<span class="prediction-card__badge prediction-card__badge--weekend">Weekend</span>'
+        : '<span class="prediction-card__badge prediction-card__badge--weekday">Workday</span>';
+    const dateLabel = formatPredictionDate(target);
+    const dayLabel = dayOffset === 0 ? 'Today' : days[day] || `Day ${day}`;
 
     return `
       <div class="prediction-card">
-        <div class="prediction-card__day">${days[day] || `Day ${day}`}${badge}</div>
+        <div class="prediction-card__day">
+          <span>${escapeHTML(dayLabel)} <span class="prediction-card__date">${escapeHTML(dateLabel)}</span></span>
+          ${badge}
+        </div>
         <div class="prediction-card__window">
           Idle window: ${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')} – ${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}
         </div>
@@ -622,9 +639,15 @@ async function loadSettings() {
   const tabVal = document.getElementById('setting-target-tabs-val');
   const forceSlider = document.getElementById('setting-force-threshold');
   const forceVal = document.getElementById('setting-force-threshold-val');
+  const calendarSelect = document.getElementById('setting-holiday-calendar');
   memSlider.oninput = () => { memVal.textContent = `${memSlider.value}%`; };
   tabSlider.oninput = () => { tabVal.textContent = tabSlider.value; };
   forceSlider.oninput = () => { forceVal.textContent = `${forceSlider.value}%`; };
+  calendarSelect.onchange = async () => {
+    await sendMessage({ type: 'updateSettings', settings: { holidayCalendar: calendarSelect.value } });
+    await loadPredictions();
+    await updateAISuggestions();
+  };
 
   // Update mode toggle UI
   updateModeToggle(settings.testMode === true);
@@ -687,6 +710,9 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
   const btn = document.getElementById('btn-save-settings');
   btn.textContent = '✓ Saved';
   btn.style.background = 'var(--success)';
+  await updateStatus();
+  await loadPredictions();
+  await updateAISuggestions();
   setTimeout(() => {
     btn.textContent = 'Save Settings';
     btn.style.background = '';
@@ -705,10 +731,10 @@ async function updateStatus() {
     text.textContent = `${APP_NAME} is disabled`;
   } else if (settings.testMode) {
     dot.className = 'status__dot status__dot--test';
-    text.textContent = '🧪 Test mode — learning, not closing';
+    text.textContent = 'Test: learning only';
   } else {
     dot.className = 'status__dot status__dot--active';
-    text.textContent = '🚀 Deploy mode — monitoring active tabs';
+    text.textContent = 'Deploy: active';
   }
 }
 
@@ -742,6 +768,7 @@ async function setMode(testMode) {
   });
   updateModeToggle(testMode);
   await updateStatus();
+  await updateAISuggestions();
 }
 
 document.getElementById('btn-mode-deploy')?.addEventListener('click', () => setMode(false));
@@ -856,7 +883,10 @@ document.getElementById('btn-ai-cleanup')?.addEventListener('click', async () =>
   }, 3000);
 
   await loadActiveTabs();
+  await loadClosedLog();
   await updateMemoryPressure();
+  await updateCPUUsage();
+  await updateAISuggestions();
 });
 
 // ── AI Suggestions ───────────────────────────────────────────────────
@@ -901,6 +931,7 @@ async function updateAISuggestions() {
 // ── Initialise ───────────────────────────────────────────────────────
 
 let mlStatusTimer = null;
+let suggestionsTimer = null;
 
 async function init() {
   await updateStatus();
@@ -920,6 +951,9 @@ async function init() {
       updateMemoryPressure();
       updateCPUUsage();
     }, 5_000);
+  }
+  if (!suggestionsTimer) {
+    suggestionsTimer = setInterval(updateAISuggestions, 30_000);
   }
 }
 

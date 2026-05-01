@@ -168,7 +168,7 @@ Setting: `testMode` (boolean, default `false`).
 
 ## Memory Pressure & AI Cleanup
 
-**Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a compact model/thread label such as `Apple M3 8T`. Color: green (<60%), orange (60–80%), red (≥80%).
+**Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a very compact model/thread label such as `M3 8T`; keep it short or the popup header will overflow. Color: green (<60%), orange (60–80%), red (≥80%).
 
 **AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
 ```
@@ -193,6 +193,10 @@ Below memory bar in popup. `getAISuggestion()` in background.js analyzes current
 - 🟢 `ok` — everything nominal.
 
 Each suggestion has `action` (button label) and `msg` (explanation). Popup renders as clickable cards that trigger the corresponding action.
+
+Popup refresh behavior: `Check`, `AI Clean`, mode changes, holiday-calendar changes, and settings saves all refresh AI Suggestions. A low-frequency 30s timer also refreshes suggestions while the popup stays open.
+
+Training samples: the popup displays real `trainingSamples` from the companion. It no longer fakes `99/100` while the model is awaiting enough valid/varied samples; raw browser events are shown separately as `0 valid (N events)` when applicable.
 
 ## Important Paths (new/changed)
 

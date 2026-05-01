@@ -289,14 +289,16 @@ final class IdlePredictor {
     }
 
     func healthPayload(activityCount: Int, holidayLevel: Int = 0) -> [String: Any] {
-        if let lastMetricsRefresh, Date().timeIntervalSince(lastMetricsRefresh) > 15 * 60 {
+        let shouldRefreshMetrics = lastMetricsRefresh
+            .map { Date().timeIntervalSince($0) > 15 * 60 } ?? true
+        if shouldRefreshMetrics {
             refreshMetricsIfNeeded(activityCount: activityCount)
         }
 
         let usingCoreML = model != nil
         let decision = decisionSnapshot(holidayLevel: holidayLevel)
-        let matureSamples = max(metrics.trainingSamples, activityCount)
-        let maturity = min(1.0, Double(matureSamples) / 1_000.0)
+        let trainingSamples = metrics.trainingSamples
+        let maturity = min(1.0, Double(trainingSamples) / 1_000.0)
         let devices = localDeviceStatus(usingCoreML: usingCoreML)
         let markerStates = hardwareMarkerStates(from: devices)
         let modelAccuracyValue: Any
@@ -320,7 +322,7 @@ final class IdlePredictor {
             "runtimeLabel": (model != nil ? "Core ML Auto" : (!lookup.isEmpty ? "CPU Lookup" : "CPU Heuristic")),
             "computeUnits": usingCoreML ? "all" : "cpu",
             "activityCount": activityCount,
-            "trainingSamples": matureSamples,
+            "trainingSamples": trainingSamples,
             "targetTrainingSamples": 1_000,
             "minimumTrainingSamples": 100,
             "modelMaturity": maturity,
