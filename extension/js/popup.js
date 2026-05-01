@@ -190,7 +190,12 @@ function computePathExplanation(status = {}) {
   if (status.connected === false) {
     return `Browser CPU heuristic; NPU telemetry ${status.disconnectReason || 'offline'}`;
   }
-  return `CPU heuristic (${status.activityCount || status.trainingSamples || 0}/${status.minimumTrainingSamples || 100} samples before Core ML)`;
+  const count = status.activityCount || status.trainingSamples || 0;
+  const min = status.minimumTrainingSamples || 100;
+  if (count >= min && !status.modelLoaded && status.runtime !== 'lookup') {
+    return `CPU heuristic (awaiting idle/active variety for Core ML)`;
+  }
+  return `CPU heuristic (${count}/${min} samples before Core ML)`;
 }
 
 function renderConfidenceCurve(curve = []) {
@@ -232,10 +237,19 @@ function renderMLConsole(status = {}) {
 
   link.textContent = status.connected ? 'Connected' : 'Disconnected';
   link.style.color = status.connected ? 'var(--success)' : 'var(--danger)';
+  const isAwaitingVariety = !status.modelLoaded && trainingSamples >= minimumSamples;
+  const displaySamples = isAwaitingVariety ? minimumSamples - 1 : trainingSamples;
+
   samples.textContent = status.modelLoaded
     ? `${trainingSamples.toLocaleString()} / ${targetSamples.toLocaleString()}`
-    : `${trainingSamples.toLocaleString()} / ${minimumSamples.toLocaleString()} for Core ML`;
-  progress.style.width = `${Math.round(Math.max(0, Math.min(1, maturity)) * 100)}%`;
+    : isAwaitingVariety
+      ? `${displaySamples.toLocaleString()} / ${minimumSamples.toLocaleString()} (Needs idle data)`
+      : `${displaySamples.toLocaleString()} / ${minimumSamples.toLocaleString()} for Core ML`;
+  
+  const displayMaturity = isAwaitingVariety 
+    ? (minimumSamples - 1) / minimumSamples 
+    : maturity;
+  progress.style.width = `${Math.round(Math.max(0, Math.min(1, displayMaturity)) * 100)}%`;
   trainingStatus.textContent = status.readinessReason || status.runtimeLabel || 'Checking local runtime';
   trainingStatus.title = trainingStatus.textContent;
   computePath.textContent = computePathExplanation(status);
