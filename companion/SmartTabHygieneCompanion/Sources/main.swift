@@ -16,7 +16,8 @@ import NaturalLanguage
 
 let appSupportDir: URL = {
     let dir: URL
-    if let override = ProcessInfo.processInfo.environment["MIMO_APP_SUPPORT_DIR"], !override.isEmpty {
+    let environment = ProcessInfo.processInfo.environment
+    if let override = environment["SMART_TAB_HYGIENE_APP_SUPPORT_DIR"] ?? environment["MIMO_APP_SUPPORT_DIR"], !override.isEmpty {
         dir = URL(fileURLWithPath: override, isDirectory: true)
     } else {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -292,6 +293,9 @@ final class IdlePredictor {
         let decision = decisionSnapshot()
         let matureSamples = max(metrics.trainingSamples, activityCount)
         let maturity = min(1.0, Double(matureSamples) / 1_000.0)
+        let runtimeNote = usingCoreML
+            ? "Core ML selects the exact ANE/GPU/CPU target internally; public APIs expose availability and requested compute units, not the per-inference processor."
+            : "Core ML model is not loaded yet, so predictions use a local CPU fallback while more browser activity is collected and retraining continues."
         var payload: [String: Any] = [
             "type": "health",
             "ok": true,
@@ -315,7 +319,7 @@ final class IdlePredictor {
             "inferenceCount": inferenceCount,
             "devices": localDeviceStatus(usingCoreML: usingCoreML),
             "sampledAt": Date().timeIntervalSince1970 * 1000,
-            "note": "Core ML selects the exact ANE/GPU/CPU target internally; public APIs expose availability and requested compute units, not the per-inference processor.",
+            "note": runtimeNote,
         ]
 
         if let lastInferenceAt {
@@ -475,9 +479,9 @@ final class IdlePredictor {
             return "Collecting \(activityCount)/100 samples before first Core ML training run"
         }
         if !lookup.isEmpty {
-            return "Using lookup fallback until Core ML model is trained and loaded"
+            return "CPU lookup active; Core ML model artifact is not loaded yet"
         }
-        return "Using CPU heuristic until enough local activity is available"
+        return "CPU heuristic active; waiting for enough idle/active variety to train Core ML"
     }
 
     private func refreshMetricsIfNeeded(activityCount: Int) {
@@ -843,15 +847,51 @@ func localDeviceStatus(usingCoreML: Bool) -> [[String: Any]] {
 final class LocalPageClassifier {
     private let keywords: [String: [String]] = [
         "nsfw": ["adult", "explicit", "nsfw", "xxx", "erotic", "cam", "fetish", "porn", "hentai"],
-        "finance": ["bank", "banking", "brokerage", "portfolio", "credit", "mortgage", "invoice", "payment", "transaction", "crypto", "investment", "trading"],
-        "ai": ["chatgpt", "openai", "claude", "anthropic", "gemini", "deepseek", "hugging face", "huggingface", "perplexity", "copilot", "mistral", "qwen", "kimi", "doubao", "chatglm", "grok", "phind", "openrouter", "lmarena", "replicate", "cursor", "windsurf", "prompt", "assistant", "llm", "large language model", "model card", "transformers", "inference", "ai studio", "model playground"],
-        "email": ["inbox", "email", "message", "chat", "workspace", "meeting", "conversation", "slack", "gmail", "outlook"],
-        "work": ["pull request", "issue tracker", "sprint", "project", "workspace", "document", "spreadsheet", "dashboard", "deployment", "repository", "jira", "notion"],
-        "social": ["profile", "followers", "following", "feed", "timeline", "post", "comments", "community", "likes"],
-        "news": ["breaking news", "latest news", "analysis", "opinion", "reporting", "world news", "market news", "reuters", "apnews"],
-        "shopping": ["cart", "checkout", "order", "shipping", "product", "sale", "coupon", "wishlist", "price"],
-        "entertainment": ["watch", "stream", "episode", "movie", "music", "playlist", "gameplay", "trailer", "video"],
-        "reference": ["documentation", "tutorial", "reference", "manual", "guide", "course", "lesson", "api", "wiki", "stackoverflow"],
+        "finance": [
+            "bank", "banking", "brokerage", "portfolio", "credit", "mortgage", "invoice", "payment", "transaction", "crypto", "investment", "trading",
+            "mufg", "smbc", "mizuhobank", "rakuten-sec", "sbisec", "monex", "jpx", "alipay", "tenpay", "eastmoney", "xueqiu", "futunn", "tigerbrokers",
+            "銀行", "証券", "投資", "株価", "資産", "口座", "決済", "银行", "证券", "投资", "股票", "基金", "理财", "支付", "账单",
+        ],
+        "ai": [
+            "chatgpt", "openai", "claude", "anthropic", "gemini", "deepseek", "hugging face", "huggingface", "perplexity", "copilot", "mistral", "qwen", "kimi", "doubao", "chatglm", "grok", "phind", "openrouter", "lmarena", "replicate", "cursor", "windsurf", "prompt", "assistant", "llm", "large language model", "model card", "transformers", "inference", "ai studio", "model playground",
+            "yiyan", "wenxin", "tongyi", "yuanbao", "zhipuai", "bigmodel", "baichuan-ai", "minimax", "coze", "dify",
+            "生成ai", "人工知能", "チャット", "プロンプト", "大規模言語モデル", "生成式ai", "人工智能", "提示词", "大语言模型", "智能体",
+        ],
+        "email": [
+            "inbox", "email", "message", "chat", "workspace", "meeting", "conversation", "slack", "gmail", "outlook",
+            "mail.qq", "mail.163", "mail.126", "mail.sina", "mail.aliyun", "mail.yahoo.co.jp", "chatwork", "line.me", "worksmobile",
+            "受信トレイ", "メール", "メッセージ", "会議", "通知", "收件箱", "邮箱", "邮件", "消息", "会议",
+        ],
+        "work": [
+            "pull request", "issue tracker", "sprint", "project", "workspace", "document", "spreadsheet", "dashboard", "deployment", "repository", "jira", "notion",
+            "qiita", "zenn", "cybozu", "backlog", "esa.io", "kintone", "yuque", "teambition", "feishu", "larksuite", "coding.net", "gitee", "tapd", "shimo",
+            "プロジェクト", "タスク", "議事録", "資料", "ドキュメント", "開発", "项目", "任务", "文档", "表格", "看板", "部署", "代码仓库",
+        ],
+        "social": [
+            "profile", "followers", "following", "feed", "timeline", "post", "comments", "community", "likes",
+            "weibo", "xiaohongshu", "zhihu", "douban", "tieba", "5ch", "2ch", "mixi",
+            "フォロー", "プロフィール", "投稿", "コメント", "コミュニティ", "关注", "粉丝", "主页", "帖子", "评论", "社区", "动态",
+        ],
+        "news": [
+            "breaking news", "latest news", "analysis", "opinion", "reporting", "world news", "market news", "reuters", "apnews",
+            "nhk", "asahi", "yomiuri", "mainichi", "sankei", "nikkei", "news.yahoo.co.jp", "itmedia", "gigazine", "toyokeizai", "diamond.jp", "news.livedoor", "36kr", "thepaper", "caixin", "jiemian", "toutiao", "ifeng", "ithome", "guancha", "people.com.cn", "xinhuanet",
+            "ニュース", "速報", "報道", "記事", "社会", "政治", "経済", "新闻", "快讯", "报道", "时政", "财经", "热点", "专栏",
+        ],
+        "shopping": [
+            "cart", "checkout", "order", "shipping", "product", "sale", "coupon", "wishlist", "price",
+            "taobao", "tmall", "jd.com", "pinduoduo", "rakuten.co.jp", "mercari", "yodobashi", "zozo", "kakaku",
+            "カート", "購入", "注文", "配送", "商品", "セール", "価格", "购物车", "购买", "订单", "优惠券", "价格",
+        ],
+        "entertainment": [
+            "watch", "stream", "episode", "movie", "music", "playlist", "gameplay", "trailer", "video",
+            "bilibili", "nicovideo", "niconico", "abema", "tver", "pixiv", "douyin", "kuaishou", "youku", "iqiyi", "acfun", "music.163",
+            "動画", "映画", "音楽", "配信", "アニメ", "漫画", "ゲーム", "视频", "电影", "音乐", "直播", "动漫", "游戏", "播放",
+        ],
+        "reference": [
+            "documentation", "tutorial", "reference", "manual", "guide", "course", "lesson", "api", "wiki", "stackoverflow",
+            "baike", "wikipedia", "csdn", "cnblogs", "juejin", "segmentfault", "oschina", "teratail", "note.com", "hatena", "kotobank", "weblio", "developer.aliyun", "cloud.tencent", "infoq.cn", "sspai",
+            "百科", "辞書", "解説", "使い方", "講座", "学習", "词条", "教程", "指南", "文档", "学习", "课程", "知识库",
+        ],
     ]
 
     func classify(url: String, title: String, description: String, text: String) -> [String: Any] {

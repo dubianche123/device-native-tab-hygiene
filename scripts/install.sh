@@ -16,11 +16,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-COMPANION_DIR="$PROJECT_DIR/companion/MimoCompanion"
+COMPANION_DIR="$PROJECT_DIR/companion/SmartTabHygieneCompanion"
 HOST_NAME="com.smarttabhygiene.companion"
 BINARY_PATH="$HOME/.local/bin/SmartTabHygieneCompanion"
-EXTENSION_ID="${1:-${MIMO_EXTENSION_ID:-REPLACE_WITH_EXTENSION_ID}}"
-PREBUILT_BINARY="${MIMO_COMPANION_BINARY:-}"
+EXTENSION_ID="${1:-${SMART_TAB_HYGIENE_EXTENSION_ID:-${MIMO_EXTENSION_ID:-REPLACE_WITH_EXTENSION_ID}}}"
+PREBUILT_BINARY="${SMART_TAB_HYGIENE_COMPANION_BINARY:-${MIMO_COMPANION_BINARY:-}}"
 
 # ── Colours ────────────────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ else
     cd "$COMPANION_DIR"
 
     if ! command -v swift &>/dev/null; then
-        err "Swift not found. Install Xcode/Command Line Tools, or set MIMO_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion."
+        err "Swift not found. Install Xcode/Command Line Tools, or set SMART_TAB_HYGIENE_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion."
         exit 1
     fi
 

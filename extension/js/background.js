@@ -418,11 +418,13 @@ chrome.idle.onStateChanged.addListener(async (newState) => {
 
 async function performStaleCheck() {
   const settings = await getSettings();
-  if (!settings.enabled) return;
+  if (!settings.enabled) return { ok: true, disabled: true, scannedCount: 0, closedCount: 0 };
 
   const registry = await getTabRegistry();
   const now = Date.now();
   const closedTabs = [];
+  let staleCount = 0;
+  let deferredCount = 0;
   const active = await getActiveSession();
   const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
   const currentlyIdle = await browserIsIdle();
@@ -439,6 +441,7 @@ async function performStaleCheck() {
     const result = isTabStale(entry.lastVisited, categoryKey, settings.customThresholds);
 
     if (!result.stale) continue;
+    staleCount++;
 
     // NSFW closes as soon as stale. Other categories prefer quiet windows
     // learned by Core ML or reported by chrome.idle.
@@ -452,7 +455,10 @@ async function performStaleCheck() {
       }
     }
 
-    if (!shouldClose) continue;
+    if (!shouldClose) {
+      deferredCount++;
+      continue;
+    }
 
     // Attempt to close the tab
     try {
@@ -495,6 +501,16 @@ async function performStaleCheck() {
     await setReturnNotification({ pending: true, closedTabs });
     console.log(`[Smart Tab Hygiene] Closed ${closedTabs.length} stale tab(s). Return notification queued.`);
   }
+
+  return {
+    ok: true,
+    disabled: false,
+    scannedCount: Object.keys(registry).length,
+    staleCount,
+    deferredCount,
+    closedCount: closedTabs.length,
+    closeWindowIsQuiet,
+  };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -591,8 +607,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await getClosedLog());
         break;
       case 'forceCheck':
-        await performStaleCheck();
-        sendResponse({ ok: true });
+        sendResponse(await performStaleCheck());
         break;
       case 'getSettings':
         sendResponse(await getSettings());

@@ -72,13 +72,13 @@ The popup status area also shows the local ML runtime. `Link: Connected` confirm
 1. Open `chrome://extensions` (or `edge://extensions`)
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked**
-4. Select the `Mimo/extension` directory
+4. Select the `Smart-Tab-Hygiene/extension` directory
 5. Copy the extension ID shown on the card
 
 ### 2. Build & Install the Companion
 
 ```bash
-cd Mimo
+cd Smart-Tab-Hygiene
 chmod +x scripts/install.sh
 ./scripts/install.sh <extension-id>
 ```
@@ -91,7 +91,7 @@ This will:
 If you already have a prebuilt companion binary, you can skip the local Swift build:
 
 ```bash
-MIMO_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion ./scripts/install.sh YOUR_EXTENSION_ID
+SMART_TAB_HYGIENE_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion ./scripts/install.sh YOUR_EXTENSION_ID
 ```
 
 ### 3. Restart the Browser
@@ -135,19 +135,19 @@ This generates synthetic activity events and a fallback idle lookup based on typ
 
 ## Sharing / Distribution Notes
 
-The browser extension can be loaded directly from `Mimo/extension` or packaged for the Chrome Web Store / Edge Add-ons store. The Apple ML companion is different: Chrome and Edge do not allow an extension package to install a Native Messaging host by itself. That native host must be installed separately by the user, by a signed macOS app, or by an installer package.
+The browser extension can be loaded directly from `Smart-Tab-Hygiene/extension` or packaged for the Chrome Web Store / Edge Add-ons store. The Apple ML companion is different: Chrome and Edge do not allow an extension package to install a Native Messaging host by itself. That native host must be installed separately by the user, by a signed macOS app, or by an installer package.
 
 Practical distribution options:
 
 - Extension-only mode: easiest for friends; uses browser idle signals and fallback predictions, but not Apple Core ML.
 - Extension + install script: current developer-friendly path.
 - Extension + signed macOS companion app/pkg: best polished path for public sharing.
-- Prebuilt companion binary: avoids requiring friends to install Xcode/Swift, using `MIMO_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion ./scripts/install.sh EXTENSION_ID`.
+- Prebuilt companion binary: avoids requiring friends to install Xcode/Swift, using `SMART_TAB_HYGIENE_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion ./scripts/install.sh EXTENSION_ID`.
 
 ## Project Structure
 
 ```
-Mimo/
+Smart-Tab-Hygiene/
 ├── extension/                    # Chrome/Edge extension
 │   ├── manifest.json            # Manifest V3
 │   ├── popup.html               # Extension popup UI
@@ -162,7 +162,7 @@ Mimo/
 │   │   └── popup.js             # Popup UI controller
 │   └── icons/                   # Extension icons
 ├── companion/
-│   └── MimoCompanion/
+│   └── SmartTabHygieneCompanion/
 │       ├── Package.swift        # Swift Package Manager
 │       ├── Sources/main.swift   # Native Messaging host + Core ML
 │       └── Info.plist
@@ -243,7 +243,7 @@ chmod +x scripts/uninstall.sh
 ./scripts/uninstall.sh
 ```
 
-Then remove the extension from Chrome/Edge and delete the `Mimo/` directory.
+Then remove the extension from Chrome/Edge and delete the `Smart-Tab-Hygiene/` directory.
 
 ## License
 

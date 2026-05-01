@@ -39,6 +39,11 @@ function formatPercent(value, digits = 0) {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function formatDays(value) {
+  const days = Number(value) || 0;
+  return days >= 10 ? days.toFixed(0) : days.toFixed(1);
+}
+
 function formatClock(hour, minute) {
   if (typeof hour !== 'number') return '';
   return `${String(hour).padStart(2, '0')}:${String(minute || 0).padStart(2, '0')}`;
@@ -140,6 +145,33 @@ function retrainRuntimeLabel(status = {}) {
   return runtime;
 }
 
+function computePathExplanation(status = {}) {
+  const runtime = status.runtime || 'heuristic';
+  const devices = status.devices || [];
+  const npu = devices.find(device => device.key === 'npu');
+  const gpu = devices.find(device => device.key === 'gpu');
+  const cpu = devices.find(device => device.key === 'cpu');
+
+  if (runtime === 'coreml') {
+    const eligible = [
+      npu?.available ? 'NPU eligible' : null,
+      gpu?.available ? 'GPU eligible' : null,
+      cpu?.available ? 'CPU fallback ready' : null,
+    ].filter(Boolean).join(', ');
+    return `Core ML Auto (${eligible || 'Apple runtime managed'})`;
+  }
+  if (runtime === 'lookup') {
+    return `CPU lookup fallback (${status.trainingSamples || 0} local samples)`;
+  }
+  if (runtime === 'disabled') {
+    return 'Companion disabled in settings';
+  }
+  if (status.connected === false) {
+    return 'Browser CPU heuristic while native link is offline';
+  }
+  return `CPU heuristic (${status.activityCount || status.trainingSamples || 0}/${status.minimumTrainingSamples || 100} samples before Core ML)`;
+}
+
 function renderConfidenceCurve(curve = []) {
   const container = document.getElementById('confidence-curve');
   if (!container) return;
@@ -163,6 +195,8 @@ function renderMLConsole(status = {}) {
   const link = document.getElementById('ml-link');
   const samples = document.getElementById('ml-samples');
   const progress = document.getElementById('ml-progress-fill');
+  const trainingStatus = document.getElementById('ml-training-status');
+  const computePath = document.getElementById('ml-compute-path');
   const accuracy = document.getElementById('ml-accuracy');
   const retrain = document.getElementById('ml-retrain');
   const decision = document.getElementById('decision-headline');
@@ -181,6 +215,10 @@ function renderMLConsole(status = {}) {
     ? `${trainingSamples.toLocaleString()} / ${targetSamples.toLocaleString()}`
     : `${trainingSamples.toLocaleString()} / ${minimumSamples.toLocaleString()} for Core ML`;
   progress.style.width = `${Math.round(Math.max(0, Math.min(1, maturity)) * 100)}%`;
+  trainingStatus.textContent = status.readinessReason || status.runtimeLabel || 'Checking local runtime';
+  trainingStatus.title = trainingStatus.textContent;
+  computePath.textContent = computePathExplanation(status);
+  computePath.title = status.note || computePath.textContent;
   accuracy.textContent = typeof status.modelAccuracy === 'number'
     ? formatPercent(status.modelAccuracy, 1)
     : 'Collecting';
@@ -240,11 +278,22 @@ document.getElementById('btn-settings').addEventListener('click', () => {
 
 document.getElementById('btn-force-check').addEventListener('click', async () => {
   const btn = document.getElementById('btn-force-check');
-  btn.textContent = '⏳';
-  await sendMessage({ type: 'forceCheck' });
-  btn.textContent = '🔍';
-  loadActiveTabs();
-  loadClosedLog();
+  const statusText = document.getElementById('status-text');
+  btn.disabled = true;
+  btn.textContent = 'Checking';
+  const response = await sendMessage({ type: 'forceCheck' });
+  const closed = response?.closedCount || 0;
+  btn.textContent = closed > 0 ? `Closed ${closed}` : 'Checked';
+  statusText.textContent = response?.disabled
+    ? 'Auto-cleanup is disabled'
+    : `Checked ${response?.scannedCount ?? 0} tabs, closed ${closed}`;
+  await loadActiveTabs();
+  await loadClosedLog();
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = 'Check';
+    updateStatus();
+  }, 1800);
 });
 
 // ── Active Tabs ──────────────────────────────────────────────────────
@@ -460,13 +509,27 @@ async function loadSettings() {
   const container = document.getElementById('threshold-controls');
   container.innerHTML = Object.entries(CATEGORIES).map(([key, cat]) => {
     const current = settings.customThresholds?.[key] || cat.maxAgeMs;
-    const currentDays = (current / (24 * 60 * 60 * 1000)).toFixed(1);
+    const currentDays = Math.min(30, Math.max(0.1, current / (24 * 60 * 60 * 1000)));
     return `
       <div class="threshold-row">
         <span class="threshold-row__label" style="color:${cat.color}">${cat.label}</span>
-        <input type="number" data-cat="${key}" value="${currentDays}" step="0.1" min="0.01"> days
+        <input class="threshold-row__range" type="range" data-cat="${key}" value="${currentDays}" min="0.1" max="30" step="0.1" aria-label="${escapeHTML(cat.label)} threshold slider">
+        <input class="threshold-row__number" type="number" data-cat="${key}" value="${formatDays(currentDays)}" step="0.1" min="0.1" max="30" aria-label="${escapeHTML(cat.label)} threshold days">
+        <span class="threshold-row__unit">days</span>
       </div>`;
   }).join('');
+
+  container.querySelectorAll('.threshold-row').forEach((row) => {
+    const slider = row.querySelector('.threshold-row__range');
+    const number = row.querySelector('.threshold-row__number');
+    const sync = (source) => {
+      const value = Math.min(30, Math.max(0.1, parseFloat(source.value) || 0.1));
+      slider.value = String(value);
+      number.value = formatDays(value);
+    };
+    slider.addEventListener('input', () => sync(slider));
+    number.addEventListener('input', () => sync(number));
+  });
 }
 
 document.getElementById('btn-save-settings').addEventListener('click', async () => {
@@ -478,9 +541,9 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     .filter(Boolean);
 
   const customThresholds = {};
-  document.querySelectorAll('#threshold-controls input').forEach(input => {
+  document.querySelectorAll('#threshold-controls .threshold-row__number').forEach(input => {
     const cat = input.dataset.cat;
-    const days = parseFloat(input.value);
+    const days = Math.min(30, Math.max(0.1, parseFloat(input.value) || 0.1));
     if (days > 0) {
       customThresholds[cat] = days * 24 * 60 * 60 * 1000;
     }

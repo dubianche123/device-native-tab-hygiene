@@ -15,7 +15,7 @@
         <h1 class="header__title">Smart Tab Hygiene</h1>
       </div>
       <div class="header__actions">
-        <button id="btn-force-check" class="btn btn--icon" title="Run check now">🔍</button>
+        <button id="btn-force-check" class="btn btn--action" title="Check stale tabs now">Check</button>
         <button id="btn-settings" class="btn btn--icon" title="Settings">⚙️</button>
       </div>
     </header>
@@ -46,6 +46,14 @@
       </div>
       <div class="ml-progress">
         <div class="ml-progress__fill" id="ml-progress-fill"></div>
+      </div>
+      <div class="ml-console__row">
+        <span class="ml-console__label">Training Status</span>
+        <span class="ml-console__value" id="ml-training-status">Checking</span>
+      </div>
+      <div class="ml-console__row">
+        <span class="ml-console__label">Compute Path</span>
+        <span class="ml-console__value" id="ml-compute-path">Checking</span>
       </div>
       <div class="ml-console__row">
         <span class="ml-console__label">Model Accuracy</span>
