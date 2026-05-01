@@ -185,6 +185,8 @@ Both `performStaleCheck()` and `aiCleanup()` skip all protected tab IDs. This pr
 - `closeActiveSession()`: sets `lastBackgroundedAt = now` on the tab entry.
 - `checkpointActiveSession()`: preserves `lastForegroundAt`.
 
+**Tracker role**: The interaction tracker is a signal collector. It never decides to close a page by itself. Cleanup decisions use the background clock (`now - lastBackgroundedAt`); foreground dwell, interaction count, and focus ratio feed learning/scoring only.
+
 **Stale detection**: `isTabStale()` now receives a background reference timestamp from `backgroundReferenceTime(entry)`, which prefers `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries.
 
 **AI Cleanup scoring**: Uses `backgroundAgeMs` (= `now - lastBackgroundedAt`) for idle penalty, plus `focusRatio = foregroundDwellMs / (foregroundDwellMs + backgroundAgeMs)` to protect heavily-used tabs (+12 score bonus).
@@ -242,12 +244,14 @@ Learns from HOW the user closes tabs to dynamically adjust per-category retentio
 
 **Threshold recommendation algorithm**:
 1. Collect manual close `backgroundAgeMs` values per category (time since tab left foreground).
-2. Ignore zero / near-zero values below 1 minute — those indicate immediate close, not meaningful retention data.
+2. Ignore zero / near-zero values below 15 seconds — those indicate immediate close or misclick, not meaningful retention data.
 3. Compute median meaningful `backgroundAgeMs` of manual closes per category.
-4. Recommended threshold = `median_background_age × 1.5`, clamped to `[5 min, 2× default]`.
-5. Requires ≥ 5 meaningful manual close samples before recommending.
+4. Recommended threshold = `median_background_age × 1.5`, clamped to category floor and `2× default`.
+5. Requires ≥ 3 meaningful manual close samples before recommending.
 6. Fallback: if there are not enough meaningful `backgroundAgeMs` samples yet, use meaningful `dwellMs` (foreground dwell) as proxy for active-close patterns.
 7. Precedence for `isTabStale()`: user custom thresholds > learned thresholds > default category `maxAgeMs`.
+
+**Learned threshold floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive.
 
 **Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation.
 

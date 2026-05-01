@@ -12,23 +12,25 @@
  * for context only (stored with weight 0.2) so the system does not reinforce
  * its own decisions.
  *
- * Each sample records: category, dwellMs, ageMs, interactions, openedAt,
- * lastVisited, hourOfDay.
+ * Each sample records: category, foreground dwell, background age,
+ * interactions, openedAt, lastVisited, and hourOfDay.
  *
- * Per-category stats (median/p25/p75 of dwell & age for manual closes)
- * are used to recommend adjusted retention thresholds once enough useful
- * foreground dwell samples exist.
+ * Per-category stats are used to recommend adjusted retention thresholds
+ * once enough short-but-real manual close samples exist.
  */
 
 import { CATEGORIES, DEFAULT_CATEGORY, STORAGE_KEYS } from './constants.js';
 
 const MAX_SAMPLES = 2000;
-const MIN_MANUAL_SAMPLES = 5;      // Need at least this many manual closes to recommend
+const MIN_MANUAL_SAMPLES = 3;      // Fast provisional learning from a few repeated manual closes
 const MIN_ANY_SAMPLES = 3;         // Minimum total samples to show any stats
-const MIN_RECOMMEND_DWELL_MS = 60 * 1000; // Ignore background/mass-close samples for thresholds
+const MIN_USEFUL_SAMPLE_MS = 15 * 1000; // Ignore immediate misclicks/background bulk closes
 const AUTO_CLEANUP_WEIGHT = 0.2;   // Dampened feedback weight
 const MANUAL_TYPES = new Set(['manual_browser_close', 'manual_popup_close']);
 const VALID_TYPES = new Set([...MANUAL_TYPES, 'auto_cleanup']);
+const SHORT_SESSION_FLOOR_MS = 2 * 60 * 1000;
+const IMPORTANT_SESSION_FLOOR_MS = 10 * 60 * 1000;
+const IMPORTANT_CATEGORIES = new Set(['ai', 'work', 'email', 'reference', 'finance']);
 
 // ── Storage access ────────────────────────────────────────────────────
 
@@ -63,6 +65,10 @@ function normalizeClosureType(type) {
 
 function isManualClosure(type) {
   return MANUAL_TYPES.has(type);
+}
+
+function learnedThresholdFloor(category) {
+  return IMPORTANT_CATEGORIES.has(category) ? IMPORTANT_SESSION_FLOOR_MS : SHORT_SESSION_FLOOR_MS;
 }
 
 // ── Record a closure sample ───────────────────────────────────────────
@@ -166,14 +172,15 @@ export async function getCategoryClosureStats() {
     const manualP25BackgroundAge = percentile(b.manualBackgroundAge, 0.25);
     const autoDwellMs = median(b.autoDwell);
     const autoBackgroundAgeMs = median(b.autoBackgroundAge);
-    const recommendationDwellSamples = b.manualDwell.filter(ms => ms >= MIN_RECOMMEND_DWELL_MS);
-    const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_RECOMMEND_DWELL_MS);
+    const recommendationDwellSamples = b.manualDwell.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
+    const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
+    const thresholdFloor = learnedThresholdFloor(cat);
 
     // Recommended threshold: based on how long tabs were backgrounded
     // before the user manually closed them. This directly represents
     // "how long is this category tolerable in the background".
     // Use meaningful background age samples — skip near-zero values
-    // which usually indicate the tab was closed immediately.
+    // which usually indicate the tab was closed immediately or as a misclick.
     let recommendedThresholdMs = null;
     let thresholdDelta = null;
     const recommendationSampleCount = Math.max(validBackgroundSamples.length, recommendationDwellSamples.length);
@@ -181,7 +188,7 @@ export async function getCategoryClosureStats() {
     if (validBackgroundSamples.length >= MIN_MANUAL_SAMPLES) {
       const medianBackgroundAge = median(validBackgroundSamples);
       recommendedThresholdMs = Math.max(
-        5 * 60 * 1000,  // Floor: 5 minutes
+        thresholdFloor,
         Math.min(
           defaultThreshold * 2,  // Cap: 2x default
           medianBackgroundAge * 1.5,
@@ -192,7 +199,7 @@ export async function getCategoryClosureStats() {
       // Fallback: use foreground dwell if no background age data yet
       const recommendationDwellMs = median(recommendationDwellSamples);
       recommendedThresholdMs = Math.max(
-        5 * 60 * 1000,
+        thresholdFloor,
         Math.min(
           defaultThreshold * 2,
           recommendationDwellMs * 1.5,

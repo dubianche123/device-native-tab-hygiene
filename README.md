@@ -151,10 +151,10 @@ The system is split into two deployable artifacts:
 2. **Swift Companion App**: An invisible macOS daemon that aggregates the behavioral data, trains the local ML model, and serves predictions and page classifications.
 
 ### 1. Tab Interaction Tracker
-Tracks `openedAt`, `lastForegroundAt`, `lastBackgroundedAt`, `dwellMs` (cumulative foreground time), and `interactions`. Stale checks use time since `lastBackgroundedAt`, not time spent in the foreground. Active, pinned, and audible tabs are protected before any automatic close.
+The tracker is the signal layer, not the cleanup decision-maker. It records four facts per tab: when it entered foreground, when it left foreground, cumulative foreground dwell, and interaction count. Cleanup uses only the background clock (`now - lastBackgroundedAt`) to decide whether a tab is old enough to close; foreground dwell and interactions are learning signals used to estimate category importance. Active, pinned, and audible tabs are protected before any automatic close.
 
 ### 2. Manual Closure Learner
-Real browser closes (`Ctrl+W` / close button) and popup closes are stored in `chrome.storage.local` as closure-learning samples with category, foreground dwell, background age, interaction count, and close time. Learned thresholds prefer meaningful manual background-age samples, with foreground dwell as a fallback for active-close patterns. Programmatic closes from stale checks and AI Cleanup are explicitly suppressed from the browser-close path and recorded as context-only auto samples.
+Real browser closes (`Ctrl+W` / close button) and popup closes are stored in `chrome.storage.local` as closure-learning samples with category, foreground dwell, background age, interaction count, and close time. Learning starts from short-but-real samples of about 15 seconds and needs 3 useful manual closes for a provisional threshold. Learned thresholds prefer meaningful manual background-age samples, with foreground dwell as a fallback for active-close patterns. Programmatic closes from stale checks and AI Cleanup are explicitly suppressed from the browser-close path and recorded as context-only auto samples.
 
 ### 3. Local Page Classifier
 When the extension cannot confidently categorize a URL, it asks the companion app. The companion uses the Apple `NaturalLanguage` framework to tokenize the page title, description, and content, scoring them against a weighted taxonomy.

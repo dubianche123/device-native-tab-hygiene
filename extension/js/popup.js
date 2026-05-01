@@ -654,7 +654,7 @@ async function loadClosureLearning() {
         : '';
       const recStr = hasRecommendation
         ? `→ ${formatAge(s.recommendedThresholdMs)}`
-        : `<span class="cl-need-more">need ${Math.max(0, 5 - (s.recommendationSampleCount || 0))} useful closes</span>`;
+        : `<span class="cl-need-more">need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} useful closes</span>`;
 
       return `
         <div class="cl-row">
