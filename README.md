@@ -112,7 +112,7 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 - **Manual closure learning**: Real browser closes and popup closes become local training samples.
 - **Root-domain fallback learning**: Hard-to-classify sites can still get their own learned behavior instead of being mixed into one huge `Other` bucket.
 - **Holiday-aware idle predictions**: Japan and China calendars can widen or shift likely idle windows in the ML insights view.
-- **AI Cleanup**: Prioritizes reducing tab count first, then bounded memory-pressure cleanup, while protecting active, pinned, audible, and high-priority tabs.
+- **AI Cleanup**: Prioritizes reducing tab count first, then bounded memory-pressure cleanup, while ranking by learned close-time pressure, engagement, and interaction count.
 - **Transparent telemetry UI**: Memory, CPU, model readiness, closure learning, and idle-confidence state are shown directly in the popup.
 - **Closed-tab recovery**: Tabs closed by the extension can be restored one-by-one or in batches.
 
@@ -158,7 +158,7 @@ The browser sends per-day holiday levels for the next seven calendar dates to th
 
 ### 6. Memory Pressure Cleanup
 
-AI Cleanup scores tabs by category priority, interaction count, and idle age. Lower-value, low-interaction, long-idle tabs are cleaned first. In Test mode, the same logic tags tabs instead of closing them.
+AI Cleanup scores tabs by learned close-time pressure, engagement, interaction count, and category as a weak tie-breaker. Lower-value, low-interaction, long-idle tabs are cleaned first. In Test mode, the same logic tags tabs instead of closing them.
 
 ## Security And Privacy
 

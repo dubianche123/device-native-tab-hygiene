@@ -220,7 +220,7 @@ The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an au
 
 **Stale detection**: `tabRetentionProfile()` calculates `backgroundAgeMs` from `lastBackgroundedAt` (time since tab left foreground), then falls back to `lastVisited`, `openedAt`, and finally `now` for legacy entries. It returns the model close time, user cap, final effective close time, idle-context multiplier, and close reason for stale checks / AI Cleanup. When the Mac is actually idle and the tab is within one day of its learned close time, the tab can be marked for an early close rather than waiting for the exact threshold.
 
-**AI Cleanup scoring**: Uses `backgroundAgeMs / effectiveClosureTime` as threshold pressure. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term.
+**AI Cleanup scoring**: Uses learned close-time pressure, engagement, and interaction count to rank candidates. `backgroundAgeMs / effectiveClosureTime` is the main pressure term, while category priority is only a weak tie-breaker. Foreground/background importance is already baked into the model closure time, so do not add a separate focus-ratio protection term.
 
 **Migration**: Old entries without `lastBackgroundedAt` gracefully fall back to `lastVisited`. New entries get both fields populated.
 
@@ -230,13 +230,13 @@ The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an au
 
 **AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
 ```
-score = categoryPriority + log₂(interactions + 1) × 8 - min(72, backgroundAgeMs / effectiveClosureTime × 24)
+score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 14 - min(90, backgroundAgeMs / effectiveClosureTime × 80) - learnedShortness × 24
 ```
 - NSFW categories get score -1000 (always closed first).
 - Lower score = more likely to be closed.
 - `effectiveClosureTime` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists, then applies the user's closure time limit.
 - **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
-- High-priority categories such as AI/work are protected; long idle time lowers the score; interactions raise it.
+- High-priority categories such as AI/work are only a weak bias now; long idle time lowers the score, low engagement lowers the score, and interactions raise it.
 - Tab count is the primary stop condition. If tab count starts above `aiCleanupTargetTabs`, cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily.
 
 **Settings**:
@@ -301,8 +301,9 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 - Domain map: `extension/js/constants.js` → `DOMAIN_MAP` constant (new, 200+ entries)
 - Idle detector: `extension/js/idle-detector.js` (async `disconnectedStatus`, calendar-aware fallback)
 - Storage: `extension/js/storage.js` (new settings keys, tagged-tabs functions)
-- Background: `extension/js/background.js` (test mode, memory, AI cleanup, AI suggestions, force-trigger)
+- Background: `extension/js/background.js` (deployment gating, memory, AI cleanup, AI suggestions, force-trigger)
 - Deploy readiness: `extension/js/deployment-readiness.js` (pure state machine for Test / Armed / Deploy)
+- Cleanup ranking: `extension/js/cleanup-ranking.js` (pure AI Cleanup score helper)
 - Closure learner: `extension/js/closure-learner.js` (new — closure sampling, learned close-time recommendations)
 - Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings, closure learning UI)
 - Model transfer helpers: `scripts/export_model_bundle.sh`, `scripts/import_model_bundle.sh`

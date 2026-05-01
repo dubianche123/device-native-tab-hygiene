@@ -41,6 +41,7 @@ import {
   reconcileDeploymentMode,
   summarizeDeployReadiness,
 } from './deployment-readiness.js';
+import { computeCleanupScore } from './cleanup-ranking.js';
 import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
 import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary } from './closure-learner.js';
 import {
@@ -1156,20 +1157,31 @@ async function aiCleanup() {
       };
     }
 
-    const interactions = Math.max(0, entry.interactions || 0);
-    const focusBonus = retention.normalizedImportance * 10;
-    const earlyCloseBoost = retention.earlyCloseEligible ? 18 : 0;
+    const defaultThresholdMs = catInfo.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
+    const learnedThresholdMs = String(retention.thresholdSource || '').includes('learned')
+      ? retention.baseThresholdMs
+      : null;
+    const cleanupScore = computeCleanupScore({
+      categoryPriority: priority,
+      interactions: entry.interactions || 0,
+      normalizedImportance: retention.normalizedImportance,
+      backgroundAgeMs,
+      effectiveClosureTimeMs: retention.maxAgeMs,
+      defaultThresholdMs,
+      learnedThresholdMs,
+      blacklist: Boolean(blacklistMatch),
+      earlyCloseEligible: retention.earlyCloseEligible,
+      nsfw: entry.category === 'nsfw',
+    });
 
-    const interactionProtection = Math.log2(interactions + 1) * 8;
-    const thresholdPressure = retention.maxAgeMs > 0 ? backgroundAgeMs / retention.maxAgeMs : 0;
-    const idlePenalty = Math.min(72, thresholdPressure * 24);
-    // Blacklisted tabs get a lower score (more likely to be closed)
-    const blacklistBoost = blacklistMatch ? -20 : 0;
-    const score = entry.category === 'nsfw'
-      ? -1000
-      : priority + interactionProtection + focusBonus - idlePenalty + blacklistBoost - earlyCloseBoost;
-
-    candidates.push({ tabId, entry, score, backgroundAgeMs, retention });
+    candidates.push({
+      tabId,
+      entry,
+      score: cleanupScore.score,
+      backgroundAgeMs,
+      retention,
+      cleanupScore,
+    });
   }
 
   // Sort by score ascending (least important first)
