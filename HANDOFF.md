@@ -167,20 +167,21 @@ Setting: `idleSchedule` — `{ weekday: { sleep, wake }, rest: { sleep, wake } }
 
 Important IPC detail: `extension/js/idle-detector.js` builds `holidayLevels` for the next seven actual dates before sending `predict`. Swift's `IdlePredictor.predict(holidayLevel:holidayLevels:idleSchedule:)` applies the matching value per day, so a Monday Japanese/Chinese holiday can change that Monday's prediction even when today is not a holiday. When no Core ML model or lookup exists, Swift returns the appropriate reference schedule window directly instead of the old hardcoded sleep window.
 
-## Test / Deploy Mode
+## Test / Armed / Deploy Mode
 
-Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
+Toggle in popup header (`🚀 Deploy` / `⏳ Armed` / `🧪 Test`).
 
 - **Deploy mode**: idle-triggered `performStaleCheck()` and `aiCleanup()` can call `chrome.tabs.remove()`. Scheduled stale scans in Deploy mode require `chrome.idle` to report `idle` or `locked`; while the Mac is active, they only refresh stale tags.
+- **Armed mode**: behaves like Test mode (`testMode: true`) until close-time readiness reaches the Deploy target, then `deploymentStatus()` promotes it to Deploy automatically. Switching back to Test clears the armed state.
 - **Test mode** (fresh-install default): Same logic, but calls `tagTab(tabId)` instead — tabs get red `🏷 TEST` badge in popup. Tagged tab IDs stored in `chrome.storage.local` under `nj:taggedTabs`.
 - **Manual Check**: popup `Check` sends `forceCheck`, which now calls `performStaleCheck({ dryRun: true, source: "manual_check" })`. It refreshes stale-tab tags and reports counts, but never closes tabs, even while Deploy is active. Use `AI Clean` or scheduled auto-cleanup for real closure.
 - Tags cleared at start of each scan (`clearAllTags()`), so each run shows fresh results.
 - Idle-context acceleration and automatic stale closure are only applied while `chrome.idle` reports `idle` or `locked`. A model can still show a high time-window prior while the user is active, but active state suppresses the cleanup multiplier, high-confidence early-close path, and scheduled stale closure.
 - `Reset Model State` is available both in the popup and via `scripts/reset_model_state.sh`. It clears closure learning, root-domain memory, idle predictions, and companion-side artifacts. The shell script writes a reset request so the live native host clears its in-memory store on the next message.
 
-Setting: `testMode` (boolean, default `true` on fresh installs; existing installs keep their saved value).
+Setting: `deploymentMode` (`test` / `armed` / `deploy`, default `test`). `testMode` is still stored for compatibility and is derived from `deploymentMode`; old bare `testMode: false` data migrates to safe Test unless an explicit `deploymentMode: deploy` exists.
 
-**Deploy readiness suggestion**: The popup's AI Suggestions panel now tells the user when Deploy is reasonable. Current heuristic: keep Test until there are at least 5 manual close samples and at least 2 learned close-time buckets (category or root domain); 10 manual closes and 3 learned buckets is the safer bar.
+**Deploy readiness gate** (`extension/js/deployment-readiness.js`): Deploy is locked below 3 manual closes or 1 learned close-time bucket. At 3 manual closes + 1 learned bucket, the user can arm Deploy; it stays in Test behavior. At 5 manual closes + 2 learned buckets, Armed auto-promotes to Deploy or the user can switch directly. 10 manual closes + 3 learned buckets is the safer bar.
 
 ## Closed Log Restore
 
@@ -301,6 +302,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 - Idle detector: `extension/js/idle-detector.js` (async `disconnectedStatus`, calendar-aware fallback)
 - Storage: `extension/js/storage.js` (new settings keys, tagged-tabs functions)
 - Background: `extension/js/background.js` (test mode, memory, AI cleanup, AI suggestions, force-trigger)
+- Deploy readiness: `extension/js/deployment-readiness.js` (pure state machine for Test / Armed / Deploy)
 - Closure learner: `extension/js/closure-learner.js` (new — closure sampling, learned close-time recommendations)
 - Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings, closure learning UI)
 - Model transfer helpers: `scripts/export_model_bundle.sh`, `scripts/import_model_bundle.sh`

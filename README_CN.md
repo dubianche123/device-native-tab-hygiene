@@ -106,8 +106,8 @@ flowchart TB
 
 ## 当前功能
 
-- **Test / Deploy 模式**：Test 模式会标记本来会被关闭的标签页；Deploy 模式允许 idle 放行后的定时清理和 AI Clean 真正关闭标签页并写入日志。
-- **安全默认**：新安装默认先处于 Test，等学习样本成熟后，弹窗会提示什么时候适合切到 Deploy。
+- **Test / Armed / Deploy 模式**：Test 只会打标；Armed 会保持 Test 行为，等学习数据达标后自动切到 Deploy；Deploy 允许 idle 放行后的定时清理和 AI Clean 真正关闭标签页并写入日志。
+- **安全默认**：新安装默认先处于 Test。数据严重不足时 Deploy 会锁住；有早期关闭时间学习后可以先 Armed；达到 readiness 目标后才会真正 Deploy。
 - **按类别保留**：AI、工作、金融、邮箱、参考、社交、娱乐、购物、新闻、NSFW 和 `Other` 都有自己的关闭上限。
 - **手动关闭学习**：真实浏览器关闭和 Popup 里的关闭行为都会变成本地训练样本。
 - **根域名兜底学习**：难以分类的网站也能按根域名学到自己的行为，不会全挤进一个巨大的 `Other` 桶。
@@ -255,7 +255,7 @@ Neural-Janitor 的学习成果保存在：
 - **MEM / CPU**：显示当前内存压力、CPU 占用，以及简短的 CPU 型号 / 线程数。
 - **ML Insights**：显示未来七天的闲置窗口，包含工作日、周末或节假日标签。
 - **Settings**：控制是否使用伴随程序、日历选择、关闭时间上限、白名单、定时黑名单和 AI Cleanup 目标。
-- **AI Suggestions**：会提示什么时候可以切到 Deploy，或者什么时候更适合继续留在 Test。
+- **AI Suggestions**：会提示 Deploy 目前是锁定、可预备、已就绪，还是应该切回 Test。
 - **Reset Model State**：清空关闭学习、域名记忆、idle 预测和本地 companion 学习文件。
 
 如果你更习惯命令行，直接运行：

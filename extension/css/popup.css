@@ -207,6 +207,16 @@ body {
   color: #fff;
 }
 
+.mode-toggle__btn--armed {
+  background: var(--warning);
+  color: #1a1d24;
+}
+
+.mode-toggle__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .mode-toggle__btn:not(.mode-toggle__btn--active):hover {
   color: var(--text);
   background: var(--border);
@@ -309,6 +319,7 @@ body {
 .status__dot--idle { background: var(--warning); }
 .status__dot--error { background: var(--danger); }
 .status__dot--test { background: #f1c40f; animation: pulse-test 2s ease-in-out infinite; }
+.status__dot--armed { background: var(--warning); animation: pulse-test 2s ease-in-out infinite; }
 
 .package-power {
   flex-shrink: 0;

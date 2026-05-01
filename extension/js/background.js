@@ -32,6 +32,15 @@ import {
   inferDomainCategory, rememberDomainCategory,
 } from './storage.js';
 import { categorizePage } from './categorizer.js';
+import {
+  DEPLOYMENT_MODES,
+  decideDeploymentModeRequest,
+  deploymentModePatch,
+  modeToTestMode,
+  normalizeDeploymentMode,
+  reconcileDeploymentMode,
+  summarizeDeployReadiness,
+} from './deployment-readiness.js';
 import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
 import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary } from './closure-learner.js';
 import {
@@ -50,10 +59,6 @@ const IMPORTANCE_MULTIPLIER_MAX = 1.75;
 const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HIGH_IDLE_CONFIDENCE = 0.92;
-const DEPLOY_MIN_MANUAL_CLOSES = 5;
-const DEPLOY_SAFE_MANUAL_CLOSES = 10;
-const DEPLOY_MIN_LEARNED_CATEGORIES = 2;
-const DEPLOY_SAFE_LEARNED_CATEGORIES = 3;
 
 function isTrackableUrl(url) {
   return Boolean(url)
@@ -291,30 +296,6 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
   };
 }
 
-function deployReadiness(summary = {}) {
-  const manualCount = Number(summary.manualCount || 0);
-  const learnedCategoryCount = Number(summary.categoriesWithRecommendations || 0);
-  const learnedDomainCount = Number(summary.domainsWithRecommendations || 0);
-  const trackedCategoryCount = Number(summary.categoriesTracked || 0);
-  const trackedDomainCount = Number(summary.domainsTracked || 0);
-  const learnedBucketCount = learnedCategoryCount + learnedDomainCount;
-  const trackedBucketCount = trackedCategoryCount + trackedDomainCount;
-  const ready = manualCount >= DEPLOY_MIN_MANUAL_CLOSES && learnedBucketCount >= DEPLOY_MIN_LEARNED_CATEGORIES;
-  const safer = manualCount >= DEPLOY_SAFE_MANUAL_CLOSES
-    && learnedBucketCount >= Math.min(DEPLOY_SAFE_LEARNED_CATEGORIES, Math.max(1, trackedBucketCount));
-  return {
-    manualCount,
-    learnedCategoryCount,
-    learnedDomainCount,
-    learnedBucketCount,
-    trackedCategoryCount,
-    trackedDomainCount,
-    trackedBucketCount,
-    ready,
-    safer,
-  };
-}
-
 function closureReasonForRecord(result, backgroundAgeMs) {
   const hours = Math.round(backgroundAgeMs / (1000 * 60 * 60));
   if (result.reason === 'blacklist') {
@@ -324,6 +305,82 @@ function closureReasonForRecord(result, backgroundAgeMs) {
     return `confidence_idle_${hours}h`;
   }
   return `idle_${hours}h`;
+}
+
+async function deploymentStatus(settings = null, learningSummary = null) {
+  const currentSettings = settings || await getSettings();
+  const summary = learningSummary || await getLearningSummary();
+  const readiness = summarizeDeployReadiness(summary);
+  const currentMode = normalizeDeploymentMode(currentSettings);
+  const reconciled = reconcileDeploymentMode(currentMode, readiness);
+  const shouldPersist = reconciled.changed
+    || currentSettings.deploymentMode !== reconciled.mode
+    || currentSettings.testMode !== modeToTestMode(reconciled.mode);
+
+  let nextSettings = currentSettings;
+  if (shouldPersist) {
+    const patch = deploymentModePatch(reconciled.mode, {
+      deployArmedAt: reconciled.mode === DEPLOYMENT_MODES.ARMED
+        ? (currentSettings.deployArmedAt || Date.now())
+        : null,
+      autoDeployActivatedAt: reconciled.reason === 'armed_ready'
+        ? Date.now()
+        : (reconciled.mode === DEPLOYMENT_MODES.DEPLOY ? currentSettings.autoDeployActivatedAt || null : null),
+    });
+    nextSettings = await updateSettings(patch);
+  }
+
+  const mode = normalizeDeploymentMode(nextSettings);
+  return {
+    settings: nextSettings,
+    mode,
+    effectiveTestMode: modeToTestMode(mode),
+    readiness,
+    changed: shouldPersist,
+    reason: reconciled.reason,
+    canArm: readiness.armable,
+    canDeploy: readiness.ready,
+    blocked: !readiness.armable,
+  };
+}
+
+async function setDeploymentMode(requestedMode) {
+  const settings = await getSettings();
+  const summary = await getLearningSummary();
+  const readiness = summarizeDeployReadiness(summary);
+  const decision = decideDeploymentModeRequest(requestedMode, readiness);
+
+  if (!decision.ok) {
+    const safeSettings = await updateSettings(deploymentModePatch(DEPLOYMENT_MODES.TEST, {
+      deployArmedAt: null,
+      autoDeployActivatedAt: null,
+    }));
+    return {
+      ...decision,
+      settings: safeSettings,
+      readiness,
+      effectiveTestMode: true,
+      canArm: readiness.armable,
+      canDeploy: readiness.ready,
+      blocked: true,
+    };
+  }
+
+  const now = Date.now();
+  const nextSettings = await updateSettings(deploymentModePatch(decision.mode, {
+    deployArmedAt: decision.mode === DEPLOYMENT_MODES.ARMED ? (settings.deployArmedAt || now) : null,
+    autoDeployActivatedAt: null,
+  }));
+
+  return {
+    ...decision,
+    settings: nextSettings,
+    readiness,
+    effectiveTestMode: modeToTestMode(decision.mode),
+    canArm: readiness.armable,
+    canDeploy: readiness.ready,
+    blocked: false,
+  };
 }
 
 // ── Protected Tabs ───────────────────────────────────────────────────
@@ -831,7 +888,9 @@ chrome.idle.onStateChanged.addListener(async (newState) => {
 // ══════════════════════════════════════════════════════════════════════
 
 async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
-  const settings = await getSettings();
+  let settings = await getSettings();
+  const deployStatus = await deploymentStatus(settings);
+  settings = deployStatus.settings;
   if (!settings.enabled && !dryRun) return { ok: true, disabled: true, scannedCount: 0, closedCount: 0 };
 
   const registry = await getTabRegistry();
@@ -840,7 +899,7 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
   const taggedTabs = [];
   let staleCount = 0;
   const retentionContext = await buildCleanupContext(settings);
-  const testMode = settings.testMode === true;
+  const testMode = deployStatus.effectiveTestMode;
   const activeGuard = !dryRun && !testMode && retentionContext.currentlyIdle !== true;
   const learnedThresholds = await getLearnedThresholds();
   const protectedTabs = await getProtectedTabIds();
@@ -954,6 +1013,7 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
     dryRun,
     source,
     testMode,
+    deploymentMode: deployStatus.mode,
     activeGuard,
     action: (dryRun || testMode || activeGuard) ? (activeGuard ? 'tagged_active_guard' : 'tagged') : 'closed',
     scannedCount: Object.keys(registry).length,
@@ -1042,7 +1102,9 @@ async function getCPUUsage() {
  * long-idle tabs sink to the bottom while AI/work tabs stay protected.
  */
 async function aiCleanup() {
-  const settings = await getSettings();
+  let settings = await getSettings();
+  const deployStatus = await deploymentStatus(settings);
+  settings = deployStatus.settings;
   const targetMemory = settings.aiCleanupTargetMemory || 70;
   const targetTabs = settings.aiCleanupTargetTabs || 30;
 
@@ -1116,7 +1178,7 @@ async function aiCleanup() {
   const closedTabs = [];
   let currentMem = mem.percent;
   let currentCount = tabCount;
-  const testMode = settings.testMode === true;
+  const testMode = deployStatus.effectiveTestMode;
   const tabPressureActive = tabCount > targetTabs;
   const memoryOnlyCloseLimit = tabPressureActive ? Number.POSITIVE_INFINITY : 5;
 
@@ -1191,6 +1253,7 @@ async function aiCleanup() {
   return {
     ok: true,
     action: testMode ? 'tagged' : 'closed',
+    deploymentMode: deployStatus.mode,
     memoryBefore: mem.percent,
     tabCountBefore: tabCount,
     closedCount: testMode ? 0 : closedTabs.length,
@@ -1207,16 +1270,18 @@ async function aiCleanup() {
  * Returns { suggestions: [{ level, icon, text, action? }], mem, tabCount }.
  */
 async function getAISuggestion() {
-  const settings = await getSettings();
+  let settings = await getSettings();
   const mem = await getMemoryPressure();
   const tabCount = await getTabCount();
+  const now = Date.now();
+  const closureLearning = await getLearningSummary();
+  const deployStatus = await deploymentStatus(settings, closureLearning);
+  settings = deployStatus.settings;
+  const readiness = deployStatus.readiness;
   const targetMem = settings.aiCleanupTargetMemory || 70;
   const targetTabs = settings.aiCleanupTargetTabs || 30;
   const forceThreshold = settings.aiForceCleanupThreshold || 85;
-  const now = Date.now();
   const mutedUntil = Number(settings.aiSuggestionsMutedUntil || 0);
-  const closureLearning = await getLearningSummary();
-  const readiness = deployReadiness(closureLearning);
 
   if (mutedUntil > now) {
     return {
@@ -1229,31 +1294,46 @@ async function getAISuggestion() {
       targetTabs,
       forceThreshold,
       deployReadiness: readiness,
+      deploymentMode: deployStatus.mode,
     };
   }
 
   const suggestions = [];
 
-  if (settings.testMode) {
-    if (!readiness.ready) {
+  if (deployStatus.mode === DEPLOYMENT_MODES.TEST) {
+    if (!readiness.armable) {
       suggestions.push({
         level: 'warning',
         icon: '🧪',
-        text: `Stay in Test for now. You have ${readiness.manualCount} manual closes and ${readiness.learnedBucketCount}/${readiness.trackedBucketCount || 0} learned close-time buckets. Try Deploy after ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned buckets; ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is safer.`,
+        text: `Deploy is locked until there are ${readiness.required.ARM_MANUAL_CLOSES} manual closes and ${readiness.required.ARM_LEARNED_BUCKETS} learned close-time bucket. Keep Test mode on while the learner warms up.`,
+      });
+    } else if (!readiness.ready) {
+      suggestions.push({
+        level: 'info',
+        icon: '🧪',
+        text: `Close-time learning is warming up: ${readiness.manualCount}/${readiness.required.READY_MANUAL_CLOSES} manual closes and ${readiness.learnedBucketCount}/${readiness.required.READY_LEARNED_BUCKETS} learned buckets. You can arm Deploy now; it will activate automatically when ready.`,
+        action: 'armDeploy',
       });
     } else {
       suggestions.push({
         level: 'ok',
         icon: '🚀',
-        text: `Deploy looks ready. You have ${readiness.manualCount} manual closes and ${readiness.learnedBucketCount}/${readiness.trackedBucketCount || 0} learned close-time buckets. ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is the safer bar.`,
+        text: `Deploy looks ready. You have ${readiness.manualCount} manual closes and ${readiness.learnedBucketCount} learned close-time buckets. ${readiness.required.SAFE_MANUAL_CLOSES}/${readiness.required.SAFE_LEARNED_BUCKETS} is the safer bar.`,
         action: 'setModeDeploy',
       });
     }
+  } else if (deployStatus.mode === DEPLOYMENT_MODES.ARMED) {
+    suggestions.push({
+      level: 'info',
+      icon: '⏳',
+      text: `Deploy is armed. It will switch on automatically at ${readiness.required.READY_MANUAL_CLOSES} manual closes and ${readiness.required.READY_LEARNED_BUCKETS} learned buckets; currently ${readiness.manualCount}/${readiness.required.READY_MANUAL_CLOSES} and ${readiness.learnedBucketCount}/${readiness.required.READY_LEARNED_BUCKETS}.`,
+      action: 'setModeTest',
+    });
   } else if (!readiness.ready) {
     suggestions.push({
       level: 'warning',
       icon: '🧯',
-      text: `Deploy is active before close-time learning is ready. Consider switching back to Test until you reach ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned buckets.`,
+      text: 'Deploy was disabled because close-time learning is no longer ready.',
       action: 'setModeTest',
     });
   }
@@ -1318,7 +1398,7 @@ async function getAISuggestion() {
     if (result.stale) staleCount++;
   }
   if (staleCount > 0) {
-    const staleText = (!settings.testMode && retentionContext.currentlyIdle !== true)
+    const staleText = (!deployStatus.effectiveTestMode && retentionContext.currentlyIdle !== true)
       ? `${staleCount} stale tab(s) detected. Check can review them; automatic stale closure waits until the Mac is idle.`
       : `${staleCount} stale tab(s) detected. Run Check to review them, or AI Clean to close low-importance tabs.`;
     suggestions.push({
@@ -1338,7 +1418,16 @@ async function getAISuggestion() {
     });
   }
 
-  return { suggestions, memPercent: mem.percent, tabCount, targetMem, targetTabs, forceThreshold };
+  return {
+    suggestions,
+    memPercent: mem.percent,
+    tabCount,
+    targetMem,
+    targetTabs,
+    forceThreshold,
+    deployReadiness: readiness,
+    deploymentMode: deployStatus.mode,
+  };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1444,11 +1533,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'forceCheck':
         sendResponse(await performStaleCheck({ dryRun: true, source: 'manual_check' }));
         break;
-      case 'getSettings':
-        sendResponse(await getSettings());
+      case 'getSettings': {
+        const status = await deploymentStatus();
+        sendResponse({ ...status.settings, deploymentStatus: status });
         break;
-      case 'updateSettings':
-        sendResponse(await updateSettings(msg.settings));
+      }
+      case 'updateSettings': {
+        const patch = { ...(msg.settings || {}) };
+        const requestedMode = patch.deploymentMode
+          || (typeof patch.testMode === 'boolean' ? (patch.testMode ? DEPLOYMENT_MODES.TEST : DEPLOYMENT_MODES.DEPLOY) : null);
+        delete patch.deploymentMode;
+        delete patch.testMode;
+
+        const saved = Object.keys(patch).length > 0 ? await updateSettings(patch) : await getSettings();
+        if (requestedMode) {
+          const result = await setDeploymentMode(requestedMode);
+          sendResponse({ ...result.settings, deploymentStatus: result });
+        } else {
+          const status = await deploymentStatus(saved);
+          sendResponse({ ...status.settings, deploymentStatus: status });
+        }
+        break;
+      }
+      case 'setDeploymentMode':
+        sendResponse(await setDeploymentMode(msg.mode));
+        break;
+      case 'getDeploymentStatus':
+        sendResponse(await deploymentStatus());
         break;
       case 'requestPredictions':
         sendResponse(await requestPredictions());

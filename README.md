@@ -106,8 +106,8 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 
 ## Current Feature Set
 
-- **Test / Deploy modes**: Test mode tags tabs that would be closed. Deploy mode lets idle-approved scheduled cleanup and AI Clean close tabs and write to the closed-tab log.
-- **Safe default**: Fresh installs start in Test mode, and the popup suggests when the learning data is mature enough to switch to Deploy.
+- **Test / Armed / Deploy modes**: Test mode only tags tabs. Armed mode keeps Test behavior until learning is ready, then automatically enables Deploy. Deploy lets idle-approved scheduled cleanup and AI Clean close tabs and write to the closed-tab log.
+- **Safe default**: Fresh installs start in Test mode. Deploy is locked while data is severely insufficient, can be armed once early close-time learning exists, and only activates when the readiness target is met.
 - **Category-aware retention**: AI, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and `Other` each have their own close-time cap.
 - **Manual closure learning**: Real browser closes and popup closes become local training samples.
 - **Root-domain fallback learning**: Hard-to-classify sites can still get their own learned behavior instead of being mixed into one huge `Other` bucket.
@@ -252,7 +252,7 @@ Reload the browser extension after importing so the companion reloads the model.
 
 - **Check**: Reviews stale tabs immediately and tags them without closing anything.
 - **AI Clean**: Uses tab count, memory pressure, importance, and whitelist rules to decide what to clean.
-- **AI Suggestions**: Shows when Deploy mode is ready, or when it is safer to stay in Test a little longer.
+- **AI Suggestions**: Shows whether Deploy is locked, can be armed, is ready now, or should be switched back to Test.
 - **Reset Model State**: Clears closure learning, domain-memory shortcuts, idle predictions, and the local companion artifacts.
 - **MEM / CPU**: Shows current memory pressure, CPU usage, and compact CPU model / thread count.
 - **ML Insights**: Shows idle windows for the next seven days with workday, weekend, or holiday labels.

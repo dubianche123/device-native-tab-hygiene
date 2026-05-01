@@ -7,6 +7,7 @@
 
 import { STORAGE_KEYS } from './constants.js';
 import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
+import { DEPLOYMENT_MODES, modeToTestMode, normalizeDeploymentMode } from './deployment-readiness.js';
 import { DEFAULT_IDLE_SCHEDULE, normalizeIdleSchedule } from './idle-schedule.js';
 
 const DOMAIN_CATEGORY_MEMORY_MAX = 500;
@@ -327,6 +328,7 @@ const DEFAULT_SETTINGS = {
   blacklist: [],      // [{ pattern: string, hours: number, minutes: number }]
   holidayCalendar: 'none',
   idleSchedule: DEFAULT_IDLE_SCHEDULE,
+  deploymentMode: DEPLOYMENT_MODES.TEST,
   testMode: true,
   aiSuggestionsMutedUntil: 0,
   aiCleanupTargetMemory: 70,
@@ -359,9 +361,12 @@ function normalizeBlacklist(entries = []) {
 }
 
 function normalizeSettings(settings = {}) {
+  const deploymentMode = normalizeDeploymentMode(settings);
   return {
     ...DEFAULT_SETTINGS,
     ...settings,
+    deploymentMode,
+    testMode: modeToTestMode(deploymentMode),
     idleSchedule: normalizeIdleSchedule(settings.idleSchedule || DEFAULT_IDLE_SCHEDULE),
     blacklist: normalizeBlacklist(settings.blacklist),
   };

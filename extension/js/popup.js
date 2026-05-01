@@ -9,6 +9,7 @@
  */
 
 import { APP_NAME, CATEGORIES, DEFAULT_CATEGORY, HARDWARE_MARKER_STATES } from './constants.js';
+import { DEPLOYMENT_MODES, normalizeDeploymentMode } from './deployment-readiness.js';
 import { getUpcomingHolidays, getRestDayLevel, getHolidayName, getExtendedPeriodLabel } from './holidays.js';
 import { normalizeIdleSchedule } from './idle-schedule.js';
 import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
@@ -1278,7 +1279,7 @@ async function loadSettings() {
   };
 
   // Update mode toggle UI
-  updateModeToggle(settings.testMode === true);
+  updateModeToggle(settings);
 
   // Build closure-time cap controls.
   const container = document.getElementById('threshold-controls');
@@ -1394,15 +1395,20 @@ document.getElementById('btn-reset-learning').addEventListener('click', async ()
 
 // ── Status Bar ───────────────────────────────────────────────────────
 
-async function updateStatus() {
-  const settings = await sendMessage({ type: 'getSettings' }) || {};
+async function updateStatus(preloadedSettings = null) {
+  const settings = preloadedSettings || await sendMessage({ type: 'getSettings' }) || {};
+  const mode = normalizeDeploymentMode(settings);
   const dot = document.getElementById('status-dot');
   const text = document.getElementById('status-text');
+  updateModeToggle(settings);
 
   if (!settings.enabled) {
     dot.className = 'status__dot';
     text.textContent = `${APP_NAME} is disabled`;
-  } else if (settings.testMode) {
+  } else if (mode === DEPLOYMENT_MODES.ARMED) {
+    dot.className = 'status__dot status__dot--armed';
+    text.textContent = 'Deploy: armed';
+  } else if (mode === DEPLOYMENT_MODES.TEST) {
     dot.className = 'status__dot status__dot--test';
     text.textContent = 'Test: learning only';
   } else {
@@ -1420,32 +1426,59 @@ async function updateMLStatus() {
 
 // ── Mode Toggle ──────────────────────────────────────────────────────
 
-function updateModeToggle(testMode) {
+function updateModeToggle(settings = {}) {
   const deployBtn = document.getElementById('btn-mode-deploy');
   const testBtn = document.getElementById('btn-mode-test');
   if (!deployBtn || !testBtn) return;
 
-  if (testMode) {
+  const mode = normalizeDeploymentMode(settings);
+  const status = settings.deploymentStatus || {};
+  const blocked = mode === DEPLOYMENT_MODES.TEST && status.blocked === true;
+
+  deployBtn.classList.remove('mode-toggle__btn--active', 'mode-toggle__btn--armed');
+  testBtn.classList.remove('mode-toggle__btn--active');
+  deployBtn.disabled = blocked;
+  deployBtn.textContent = mode === DEPLOYMENT_MODES.ARMED ? '⏳ Armed' : '🚀 Deploy';
+  deployBtn.title = blocked
+    ? 'Deploy is locked until close-time learning has enough manual samples'
+    : (mode === DEPLOYMENT_MODES.ARMED
+      ? 'Deploy is armed and will activate automatically when close-time learning is ready'
+      : 'Deploy mode: automatically close stale tabs after idle approval');
+
+  if (mode === DEPLOYMENT_MODES.TEST) {
     deployBtn.classList.remove('mode-toggle__btn--active');
     testBtn.classList.add('mode-toggle__btn--active');
+  } else if (mode === DEPLOYMENT_MODES.ARMED) {
+    deployBtn.classList.add('mode-toggle__btn--active', 'mode-toggle__btn--armed');
   } else {
     deployBtn.classList.add('mode-toggle__btn--active');
     testBtn.classList.remove('mode-toggle__btn--active');
   }
 }
 
-async function setMode(testMode) {
-  await sendMessage({
-    type: 'updateSettings',
-    settings: { testMode },
+async function setMode(mode) {
+  const result = await sendMessage({
+    type: 'setDeploymentMode',
+    mode,
   });
-  updateModeToggle(testMode);
-  await updateStatus();
+  const settings = result?.settings || await sendMessage({ type: 'getSettings' }) || {};
+  const nextSettings = { ...settings, deploymentStatus: result };
+  updateModeToggle(nextSettings);
+  await updateStatus(nextSettings);
   await updateAISuggestions();
+  return result;
 }
 
-document.getElementById('btn-mode-deploy')?.addEventListener('click', () => setMode(false));
-document.getElementById('btn-mode-test')?.addEventListener('click', () => setMode(true));
+document.getElementById('btn-mode-deploy')?.addEventListener('click', async () => {
+  const btn = document.getElementById('btn-mode-deploy');
+  const result = await setMode(DEPLOYMENT_MODES.DEPLOY);
+  if (btn && result && !result.ok) {
+    const previous = btn.textContent;
+    btn.textContent = 'Locked';
+    setTimeout(() => { btn.textContent = previous; }, 1600);
+  }
+});
+document.getElementById('btn-mode-test')?.addEventListener('click', () => setMode(DEPLOYMENT_MODES.TEST));
 
 // ── Memory Pressure ──────────────────────────────────────────────────
 
@@ -1597,7 +1630,7 @@ async function updateAISuggestions() {
   container.innerHTML = data.suggestions.map(s => {
     const cls = levelClass[s.level] || 'ai-suggestion--info';
     const btn = s.action
-      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : s.action === 'forceCheck' ? '🔍 Review' : s.action === 'setModeDeploy' ? '🚀 Deploy' : s.action === 'setModeTest' ? '🧪 Test' : 'Open'}</button>`
+      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : s.action === 'forceCheck' ? '🔍 Review' : s.action === 'armDeploy' ? '⏳ Arm' : s.action === 'setModeDeploy' ? '🚀 Deploy' : s.action === 'setModeTest' ? '🧪 Test' : 'Open'}</button>`
       : '';
     const ignore = s.level !== 'ok' || s.action
       ? '<button class="btn btn--xs ai-suggestion__ignore" title="Hide AI Suggestions for 10 minutes">Ignore</button>'
@@ -1614,10 +1647,10 @@ async function updateAISuggestions() {
         document.getElementById('btn-ai-cleanup')?.click();
       } else if (action === 'forceCheck') {
         document.getElementById('btn-force-check')?.click();
-      } else if (action === 'setModeDeploy') {
-        await setMode(false);
+      } else if (action === 'setModeDeploy' || action === 'armDeploy') {
+        await setMode(DEPLOYMENT_MODES.DEPLOY);
       } else if (action === 'setModeTest') {
-        await setMode(true);
+        await setMode(DEPLOYMENT_MODES.TEST);
       }
       setTimeout(() => updateAISuggestions(), 2000);
     });
