@@ -293,6 +293,18 @@ export async function classifyURL(input) {
 
 // ── Fallback heuristic ────────────────────────────────────────────────
 
+function fallbackHeuristicProbability(hourValue, restLevel) {
+  if (restLevel === 2) {
+    // Holidays widen the early-morning idle window, but should not add a
+    // blanket daytime confidence bump just because a calendar is enabled.
+    return hourValue < 9 ? 0.60 : 0.18;
+  }
+  if (restLevel === 1) {
+    return hourValue < 8 ? 0.57 : 0.18;
+  }
+  return hourValue >= 1 && hourValue < 7 ? 0.56 : 0.18;
+}
+
 async function getFallbackPredictions() {
   const settings = await getSettings();
   const calendar = settings.holidayCalendar || 'none';
@@ -408,15 +420,7 @@ async function fallbackConfidenceNow() {
   const settings = await getSettings();
   const calendar = settings.holidayCalendar || 'none';
   const restLevel = getRestDayLevel(now, calendar);
-
-  if (restLevel === 2) {
-    // Holiday estimates are deliberately conservative until local training exists.
-    return hour < 9 ? 0.62 : 0.28;
-  }
-  if (restLevel === 1) {
-    return hour < 8 ? 0.57 : 0.23;
-  }
-  return hour >= 1 && hour < 7 ? 0.56 : 0.18;
+  return fallbackHeuristicProbability(hour, restLevel);
 }
 
 async function fallbackConfidenceCurve() {
@@ -429,15 +433,7 @@ async function fallbackConfidenceCurve() {
     const date = new Date(now.getTime() + offsetMinutes * 60_000);
     const hourValue = date.getHours() + date.getMinutes() / 60;
     const restLevel = getRestDayLevel(date, calendar);
-
-    let confidence;
-    if (restLevel === 2) {
-      confidence = hourValue < 9 ? 0.62 : 0.28;
-    } else if (restLevel === 1) {
-      confidence = hourValue < 8 ? 0.57 : 0.23;
-    } else {
-      confidence = hourValue >= 1 && hourValue < 7 ? 0.56 : 0.18;
-    }
+    const confidence = fallbackHeuristicProbability(hourValue, restLevel);
 
     return {
       offsetMinutes,

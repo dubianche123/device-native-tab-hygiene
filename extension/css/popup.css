@@ -917,24 +917,15 @@ body {
 
 .threshold-row {
   display: grid;
-  grid-template-columns: minmax(74px, 0.8fr) minmax(92px, 1fr) 58px 28px;
+  grid-template-columns: minmax(74px, 0.75fr) minmax(0, 1.45fr);
   grid-template-areas:
-    "label computed computed computed"
-    "range range number unit";
+    "label computed"
+    "control control";
   align-items: center;
-  gap: 5px 6px;
-  padding: 8px 0;
+  gap: 6px 8px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
   font-size: 12px;
-}
-
-.threshold-row--header {
-  grid-template-areas: none;
-  grid-template-columns: minmax(74px, 0.8fr) minmax(120px, 1fr) minmax(110px, 0.8fr);
-  padding: 4px 0 2px;
-  color: var(--text-muted);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0;
 }
 
 .threshold-row__label {
@@ -951,17 +942,29 @@ body {
   min-width: 0;
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 5px;
 }
 
+.threshold-row__control {
+  grid-area: control;
+  display: grid;
+  grid-template-columns: 58px minmax(112px, 1fr) 56px 28px;
+  align-items: center;
+  gap: 6px;
+}
+
+.threshold-row__cap-label {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 .threshold-row__range {
-  grid-area: range;
   width: 100%;
   accent-color: var(--accent-light);
 }
 
 .threshold-row__number {
-  grid-area: number;
   width: 56px;
   padding: 3px 6px;
   background: var(--bg);
@@ -973,13 +976,12 @@ body {
 }
 
 .threshold-row__unit {
-  grid-area: unit;
   color: var(--text-muted);
   font-size: 10px;
 }
 
-.threshold-row__ml,
-.threshold-row__final {
+.threshold-row__learned,
+.threshold-row__effective {
   min-width: 0;
   padding: 2px 5px;
   border: 1px solid rgba(162, 155, 254, 0.24);
@@ -993,13 +995,19 @@ body {
   white-space: nowrap;
 }
 
-.threshold-row__ml {
-  max-width: 104px;
+.threshold-row__learned {
+  max-width: 132px;
   background: rgba(162, 155, 254, 0.08);
 }
 
-.threshold-row__final {
-  max-width: 78px;
+.threshold-row__learned--muted {
+  border-color: rgba(178, 190, 195, 0.22);
+  background: rgba(178, 190, 195, 0.08);
+  color: var(--text-muted);
+}
+
+.threshold-row__effective {
+  max-width: 118px;
   border-color: rgba(0, 206, 201, 0.24);
   background: rgba(0, 206, 201, 0.08);
   color: var(--success);

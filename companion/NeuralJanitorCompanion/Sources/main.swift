@@ -466,9 +466,11 @@ final class IdlePredictor {
     private func heuristicProbability(hour: Int, minute: Int, holidayLevel: Int = 0) -> Double {
         let h = Double(hour) + Double(minute) / 60.0
         if holidayLevel >= 2 {
-            return h < 9.0 ? 0.62 : 0.28
+            // Holidays widen the early-morning idle window, but do not add a
+            // blanket daytime confidence bump just because a calendar is enabled.
+            return h < 9.0 ? 0.60 : 0.18
         } else if holidayLevel >= 1 {
-            return h < 8.0 ? 0.57 : 0.23
+            return h < 8.0 ? 0.57 : 0.18
         } else {
             return (hour >= 1 && hour < 7) ? 0.56 : 0.18
         }

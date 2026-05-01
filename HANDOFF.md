@@ -152,9 +152,11 @@ Key rule: URL path substrings are **never** matched against category keywords. T
 **Fallback heuristic tiers** (in `idle-detector.js` and Swift companion):
 | Tier | Window | Confidence |
 |------|--------|------------|
-| Holiday | 00:00–09:00 | 0.62 estimate |
+| Holiday | 00:00–09:00 | 0.60 estimate |
 | Weekend | 00:00–08:00 | 0.57 estimate |
 | Weekday | 01:00–07:00 | 0.56 estimate |
+
+Outside those windows, browser/Swift CPU heuristic confidence stays at `0.18` even when a holiday calendar is selected. The calendar widens likely idle windows; it should not create a blanket daytime +10% confidence jump.
 
 Setting: `holidayCalendar` — `'none'` (default), `'japan'`, or `'china'`.
 

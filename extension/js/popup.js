@@ -832,46 +832,42 @@ async function loadSettings() {
 
   // Build closure-time cap controls.
   const container = document.getElementById('threshold-controls');
-  const controlsHeader = `
-    <div class="threshold-row threshold-row--header">
-      <span>Category</span>
-      <span>Learned close time</span>
-      <span>Max close after</span>
-    </div>
-  `;
   const controlsRows = Object.entries(CATEGORIES).map(([key, cat]) => {
     const timing = categoryClosureTiming(key, registry, learnedThresholds, settings);
     const current = timing.capTime;
     const currentDays = Math.min(30, Math.max(0.1, current / DAY_MS));
-    const modelLabel = timing.hasLearned
-      ? `ML×imp ${formatAge(timing.modelTime)}`
-      : `Default ${formatAge(timing.modelTime)}`;
+    const learnedLabel = timing.hasLearned
+      ? `${timing.liveSampleCount > 0 ? 'Learned' : 'Learned base'}: ${formatAge(timing.modelTime)}`
+      : 'Learning: no data yet';
     const modelTitle = timing.hasLearned
       ? (
         timing.liveSampleCount > 0
           ? `Machine-learned close time after foreground/background importance multiplier. Median of ${timing.liveSampleCount} live tab(s): ${formatAge(timing.modelTime)}.`
           : `Machine-learned base close time. Open tabs in this category will apply their own foreground/background importance multiplier.`
       )
-      : `No manual-close model yet. Using category default: ${formatAge(timing.modelTime)}.`;
-    const finalTitle = `Actual automatic close limit is the smaller of ML time and your max: ${formatAge(timing.finalTime)}.`;
+      : `No manual-close model yet. Using the category default until enough manual close samples exist: ${formatAge(timing.modelTime)}.`;
+    const finalTitle = `Final automatic close time = the smaller of the learned/default time and your maximum close-after setting: ${formatAge(timing.finalTime)}.`;
     return `
       <div class="threshold-row" data-model-ms="${Math.round(timing.modelTime)}">
         <span class="threshold-row__label" style="color:${cat.color}">${cat.label}</span>
         <span class="threshold-row__computed">
-          <span class="threshold-row__ml" title="${escapeHTML(modelTitle)}">${escapeHTML(modelLabel)}</span>
-          <span class="threshold-row__final" title="${escapeHTML(finalTitle)}">uses ${escapeHTML(formatAge(timing.finalTime))}</span>
+          <span class="threshold-row__learned${timing.hasLearned ? '' : ' threshold-row__learned--muted'}" title="${escapeHTML(modelTitle)}">${escapeHTML(learnedLabel)}</span>
+          <span class="threshold-row__effective" title="${escapeHTML(finalTitle)}">Final close: ${escapeHTML(formatAge(timing.finalTime))}</span>
         </span>
-        <input class="threshold-row__range" type="range" data-cat="${key}" value="${currentDays}" min="0.1" max="30" step="0.1" aria-label="${escapeHTML(cat.label)} closure time limit slider">
-        <input class="threshold-row__number" type="number" data-cat="${key}" value="${formatDays(currentDays)}" step="0.1" min="0.1" max="30" aria-label="${escapeHTML(cat.label)} closure time limit days">
-        <span class="threshold-row__unit">days</span>
+        <span class="threshold-row__control">
+          <span class="threshold-row__cap-label">Max after</span>
+          <input class="threshold-row__range" type="range" data-cat="${key}" value="${currentDays}" min="0.1" max="30" step="0.1" aria-label="${escapeHTML(cat.label)} maximum close-after slider">
+          <input class="threshold-row__number" type="number" data-cat="${key}" value="${formatDays(currentDays)}" step="0.1" min="0.1" max="30" aria-label="${escapeHTML(cat.label)} maximum close-after days">
+          <span class="threshold-row__unit">days</span>
+        </span>
       </div>`;
   }).join('');
-  container.innerHTML = controlsHeader + controlsRows;
+  container.innerHTML = controlsRows;
 
-  container.querySelectorAll('.threshold-row:not(.threshold-row--header)').forEach((row) => {
+  container.querySelectorAll('.threshold-row').forEach((row) => {
     const slider = row.querySelector('.threshold-row__range');
     const number = row.querySelector('.threshold-row__number');
-    const final = row.querySelector('.threshold-row__final');
+    const final = row.querySelector('.threshold-row__effective');
     const modelTimeMs = Number(row.dataset.modelMs) || 0;
     const sync = (source) => {
       const value = Math.min(30, Math.max(0.1, parseFloat(source.value) || 0.1));
@@ -879,8 +875,8 @@ async function loadSettings() {
       number.value = formatDays(value);
       if (final) {
         const finalMs = finalClosureTimeFor(modelTimeMs, value);
-        final.textContent = `uses ${formatAge(finalMs)}`;
-        final.title = `Actual automatic close limit is the smaller of ML time and your max: ${formatAge(finalMs)}.`;
+        final.textContent = `Final close: ${formatAge(finalMs)}`;
+        final.title = `Final automatic close time = the smaller of the learned/default time and your maximum close-after setting: ${formatAge(finalMs)}.`;
       }
     };
     slider.addEventListener('input', () => sync(slider));
