@@ -17,6 +17,7 @@ Neural-Janitor 是一款面向 Chrome / Edge 的标签页管理扩展，依托 A
 ## 运行时数据流（C4 容器视图）
 
 ```mermaid
+%%{init: {'theme': 'neutral', 'themeVariables': { 'primaryColor': '#3b82f6', 'edgeLabelBackground':'transparent' }}}%%
 flowchart TB
   subgraph actors["外部角色与平台"]
     direction LR
@@ -77,17 +78,17 @@ flowchart TB
   n_chronos <--> n_storage
   n_chronos <--> coreml
 
-  %% 样式
-  style actors fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px
-  style browser fill:#f1f5f9,stroke:#64748b,stroke-width:2px
-  style native fill:#f0fdf4,stroke:#16a34a,stroke-width:2px
-  style popup fill:#ffffff,stroke:#3b82f6,stroke-dasharray: 5 5
-  style background fill:#ffffff,stroke:#3b82f6
-  style storage fill:#fff7ed,stroke:#ea580c
+  %% 样式：使用透明填充和中性色边框以适配暗色模式
+  style actors fill:none,stroke:#94a3b8,stroke-width:1px
+  style browser fill:none,stroke:#3b82f6,stroke-width:2px
+  style native fill:none,stroke:#10b981,stroke-width:2px
+  style popup fill:none,stroke:#3b82f6,stroke-dasharray: 5 5
+  style background fill:none,stroke:#3b82f6
+  style storage fill:none,stroke:#f59e0b
   style ipc fill:none,stroke:#94a3b8,stroke-dasharray: 2 2
 
-  classDef actor fill:#f9f2d7,stroke:#b59b3b,color:#2f2611,stroke-width:1px
-  classDef platform fill:#f3f4f6,stroke:#6b7280,color:#1f2937,stroke-width:1px
+  classDef actor fill:none,stroke:#b45309,stroke-width:1px
+  classDef platform fill:none,stroke:#64748b,stroke-width:1px
   class user actor
   class chrome,coreml platform
 ```
