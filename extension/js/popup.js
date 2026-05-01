@@ -9,6 +9,7 @@
  */
 
 import { APP_NAME, CATEGORIES, DEFAULT_CATEGORY, HARDWARE_MARKER_STATES } from './constants.js';
+import { getUpcomingHolidays, getRestDayLevel } from './holidays.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -335,6 +336,7 @@ document.getElementById('btn-force-check').addEventListener('click', async () =>
 
 async function loadActiveTabs() {
   const registry = await sendMessage({ type: 'getRegistry' });
+  const tagged = await sendMessage({ type: 'getTaggedTabs' }) || {};
   const list = document.getElementById('active-tab-list');
   const entries = Object.entries(registry || {});
 
@@ -360,9 +362,14 @@ async function loadActiveTabs() {
     const pct = Math.min(100, (age / maxAge) * 100);
     const urgencyClass = pct > 80 ? 'color: var(--danger)' : pct > 50 ? 'color: var(--warning)' : '';
     const favicon = faviconURL(entry);
+    const tagInfo = tagged[tabId];
+    const taggedClass = tagInfo ? ' tab-item--tagged' : '';
+    const tagBadge = tagInfo
+      ? `<span class="tab-item__tag-badge" title="${escapeHTML(tagInfo.reason || 'tagged')}">🏷 ${escapeHTML(tagInfo.reason || 'tagged')}</span>`
+      : '';
 
     return `
-      <div class="tab-item" data-url="${escapeHTML(entry.url)}">
+      <div class="tab-item${taggedClass}" data-url="${escapeHTML(entry.url)}">
         ${favicon
           ? `<img class="tab-item__favicon" src="${escapeHTML(favicon)}" onerror="this.outerHTML='<div class=\\'tab-item__favicon tab-item__favicon--fallback\\'>🌐</div>'">`
           : '<div class="tab-item__favicon tab-item__favicon--fallback">🌐</div>'}
@@ -372,6 +379,7 @@ async function loadActiveTabs() {
         </div>
         <div class="tab-item__meta">
           <span class="tab-item__badge" style="background:${cat.color}20; color:${cat.color}">${escapeHTML(cat.label)}</span>
+          ${tagBadge}
           <span class="tab-item__age" style="${urgencyClass}">idle ${formatAge(age)} / ${formatAge(maxAge)}</span>
           <span class="tab-item__age">seen ${formatAge(dwell)}</span>
           <button class="btn btn--sm btn-close-tab" data-tab-id="${escapeHTML(tabId)}" title="Close and add to Closed Log">Close &amp; Log</button>
@@ -503,6 +511,8 @@ async function loadPredictions() {
   await updateMLStatus();
   const container = document.getElementById('predictions-content');
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const settings = await sendMessage({ type: 'getSettings' }) || {};
+  const calendar = settings.holidayCalendar || 'none';
 
   const entries = Object.entries(predictions);
   if (entries.length === 0) {
@@ -510,16 +520,29 @@ async function loadPredictions() {
     return;
   }
 
-  container.innerHTML = entries.map(([day, pred]) => {
+  const now = new Date();
+
+  const cards = entries.map(([day, pred]) => {
     const startH = Math.floor(pred.startHour);
     const startM = Math.round((pred.startHour % 1) * 60);
     const endH = Math.floor(pred.endHour);
     const endM = Math.round((pred.endHour % 1) * 60);
     const conf = Math.round((pred.confidence || 0) * 100);
 
+    // Compute the actual date for this day-of-week
+    const dayOffset = ((parseInt(day) - now.getDay()) + 7) % 7;
+    const target = new Date(now.getTime() + dayOffset * 86_400_000);
+    const restLevel = getRestDayLevel(target, calendar);
+
+    const badge = restLevel === 2
+      ? '<span class="prediction-card__badge prediction-card__badge--holiday">🎌 Holiday</span>'
+      : restLevel === 1
+        ? '<span class="prediction-card__badge prediction-card__badge--weekend">☀ Weekend</span>'
+        : '';
+
     return `
       <div class="prediction-card">
-        <div class="prediction-card__day">${days[day] || `Day ${day}`}</div>
+        <div class="prediction-card__day">${days[day] || `Day ${day}`}${badge}</div>
         <div class="prediction-card__window">
           Idle window: ${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')} – ${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}
         </div>
@@ -529,6 +552,20 @@ async function loadPredictions() {
         </div>
       </div>`;
   }).join('');
+
+  // Show upcoming holidays if a calendar is active
+  let holidaySection = '';
+  if (calendar !== 'none') {
+    const upcoming = getUpcomingHolidays(calendar, 14);
+    if (upcoming.length > 0) {
+      const items = upcoming.map(h =>
+        `<span class="holiday-chip">${h.date.slice(5)} ${escapeHTML(h.name)}</span>`
+      ).join(' ');
+      holidaySection = `<div class="upcoming-holidays"><h4>Upcoming holidays (14 days)</h4><div class="holiday-chips">${items}</div></div>`;
+    }
+  }
+
+  container.innerHTML = cards + holidaySection;
 }
 
 // ── Settings ─────────────────────────────────────────────────────────
@@ -538,7 +575,33 @@ async function loadSettings() {
 
   document.getElementById('setting-enabled').checked = settings.enabled !== false;
   document.getElementById('setting-use-companion').checked = settings.useCompanion !== false;
+  document.getElementById('setting-holiday-calendar').value = settings.holidayCalendar || 'none';
   document.getElementById('setting-whitelist').value = (settings.whitelist || []).join('\n');
+
+  // AI cleanup targets
+  const targetMem = settings.aiCleanupTargetMemory || 70;
+  const targetTabs = settings.aiCleanupTargetTabs || 30;
+  const forceThreshold = settings.aiForceCleanupThreshold || 85;
+  document.getElementById('setting-target-memory').value = targetMem;
+  document.getElementById('setting-target-memory-val').textContent = `${targetMem}%`;
+  document.getElementById('setting-target-tabs').value = targetTabs;
+  document.getElementById('setting-target-tabs-val').textContent = targetTabs;
+  document.getElementById('setting-force-threshold').value = forceThreshold;
+  document.getElementById('setting-force-threshold-val').textContent = `${forceThreshold}%`;
+
+  // Sync target sliders with labels
+  const memSlider = document.getElementById('setting-target-memory');
+  const memVal = document.getElementById('setting-target-memory-val');
+  const tabSlider = document.getElementById('setting-target-tabs');
+  const tabVal = document.getElementById('setting-target-tabs-val');
+  const forceSlider = document.getElementById('setting-force-threshold');
+  const forceVal = document.getElementById('setting-force-threshold-val');
+  memSlider.oninput = () => { memVal.textContent = `${memSlider.value}%`; };
+  tabSlider.oninput = () => { tabVal.textContent = tabSlider.value; };
+  forceSlider.oninput = () => { forceVal.textContent = `${forceSlider.value}%`; };
+
+  // Update mode toggle UI
+  updateModeToggle(settings.testMode === true);
 
   // Build threshold controls
   const container = document.getElementById('threshold-controls');
@@ -570,6 +633,7 @@ async function loadSettings() {
 document.getElementById('btn-save-settings').addEventListener('click', async () => {
   const enabled = document.getElementById('setting-enabled').checked;
   const useCompanion = document.getElementById('setting-use-companion').checked;
+  const holidayCalendar = document.getElementById('setting-holiday-calendar').value;
   const whitelist = document.getElementById('setting-whitelist').value
     .split('\n')
     .map(s => s.trim())
@@ -584,9 +648,13 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     }
   });
 
+  const aiCleanupTargetMemory = parseInt(document.getElementById('setting-target-memory').value, 10) || 70;
+  const aiCleanupTargetTabs = parseInt(document.getElementById('setting-target-tabs').value, 10) || 30;
+  const aiForceCleanupThreshold = parseInt(document.getElementById('setting-force-threshold').value, 10) || 85;
+
   await sendMessage({
     type: 'updateSettings',
-    settings: { enabled, useCompanion, whitelist, customThresholds },
+    settings: { enabled, useCompanion, holidayCalendar, whitelist, customThresholds, aiCleanupTargetMemory, aiCleanupTargetTabs, aiForceCleanupThreshold },
   });
 
   // Flash confirmation
@@ -609,9 +677,12 @@ async function updateStatus() {
   if (!settings.enabled) {
     dot.className = 'status__dot';
     text.textContent = `${APP_NAME} is disabled`;
+  } else if (settings.testMode) {
+    dot.className = 'status__dot status__dot--test';
+    text.textContent = '🧪 Test mode — learning, not closing';
   } else {
     dot.className = 'status__dot status__dot--active';
-    text.textContent = 'Monitoring active tabs';
+    text.textContent = '🚀 Deploy mode — monitoring active tabs';
   }
 }
 
@@ -620,6 +691,137 @@ async function updateMLStatus() {
   const nextStatus = status || {};
   renderMLStatus(nextStatus);
   renderMLConsole(nextStatus);
+}
+
+// ── Mode Toggle ──────────────────────────────────────────────────────
+
+function updateModeToggle(testMode) {
+  const deployBtn = document.getElementById('btn-mode-deploy');
+  const testBtn = document.getElementById('btn-mode-test');
+  if (!deployBtn || !testBtn) return;
+
+  if (testMode) {
+    deployBtn.classList.remove('mode-toggle__btn--active');
+    testBtn.classList.add('mode-toggle__btn--active');
+  } else {
+    deployBtn.classList.add('mode-toggle__btn--active');
+    testBtn.classList.remove('mode-toggle__btn--active');
+  }
+}
+
+async function setMode(testMode) {
+  await sendMessage({
+    type: 'updateSettings',
+    settings: { testMode },
+  });
+  updateModeToggle(testMode);
+  await updateStatus();
+}
+
+document.getElementById('btn-mode-deploy')?.addEventListener('click', () => setMode(false));
+document.getElementById('btn-mode-test')?.addEventListener('click', () => setMode(true));
+
+// ── Memory Pressure ──────────────────────────────────────────────────
+
+let memoryTimer = null;
+
+async function updateMemoryPressure() {
+  const mem = await sendMessage({ type: 'getMemoryPressure' });
+  if (!mem) return;
+
+  const fill = document.getElementById('memory-fill');
+  const value = document.getElementById('memory-value');
+  if (!fill || !value) return;
+
+  const pct = mem.percent || 0;
+  fill.style.width = `${pct}%`;
+  value.textContent = `${pct}%`;
+
+  // Color coding: green < 60, yellow < 80, red >= 80
+  if (pct >= 80) {
+    fill.style.background = '#e74c3c';
+    value.style.color = '#e74c3c';
+  } else if (pct >= 60) {
+    fill.style.background = '#f1c40f';
+    value.style.color = '#f1c40f';
+  } else {
+    fill.style.background = 'var(--accent)';
+    value.style.color = 'var(--text-muted)';
+  }
+}
+
+// ── AI Cleanup Button ────────────────────────────────────────────────
+
+document.getElementById('btn-ai-cleanup')?.addEventListener('click', async () => {
+  const btn = document.getElementById('btn-ai-cleanup');
+  if (!btn) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Cleaning…';
+
+  try {
+    const result = await sendMessage({ type: 'aiCleanup' });
+    if (result?.ok) {
+      if (result.action === 'none') {
+        btn.textContent = '✅ At target';
+      } else if (result.action === 'tagged') {
+        btn.textContent = `🏷 Tagged ${result.taggedCount}`;
+      } else {
+        btn.textContent = `🧹 Closed ${result.closedCount}`;
+      }
+    } else {
+      btn.textContent = '❌ Error';
+    }
+  } catch {
+    btn.textContent = '❌ Error';
+  }
+
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = '🧹 AI Clean';
+  }, 3000);
+
+  await loadActiveTabs();
+  await updateMemoryPressure();
+});
+
+// ── AI Suggestions ───────────────────────────────────────────────────
+
+async function updateAISuggestions() {
+  const data = await sendMessage({ type: 'getAISuggestion' });
+  if (!data?.suggestions) return;
+
+  const container = document.getElementById('ai-suggestions-list');
+  if (!container) return;
+
+  const levelClass = {
+    critical: 'ai-suggestion--critical',
+    warning: 'ai-suggestion--warning',
+    info: 'ai-suggestion--info',
+    ok: 'ai-suggestion--ok',
+  };
+
+  container.innerHTML = data.suggestions.map(s => {
+    const cls = levelClass[s.level] || 'ai-suggestion--info';
+    const btn = s.action
+      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : '🔍 Check'}</button>`
+      : '';
+    return `<div class="ai-suggestion ${cls}"><span>${s.icon}</span> ${escapeHTML(s.text)}${btn}</div>`;
+  }).join('');
+
+  container.querySelectorAll('.ai-suggestion__action').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const action = btn.dataset.action;
+      btn.disabled = true;
+      btn.textContent = '⏳';
+      if (action === 'aiCleanup') {
+        document.getElementById('btn-ai-cleanup')?.click();
+      } else if (action === 'forceCheck') {
+        document.getElementById('btn-force-check')?.click();
+      }
+      setTimeout(() => updateAISuggestions(), 2000);
+    });
+  });
 }
 
 // ── Initialise ───────────────────────────────────────────────────────
@@ -632,8 +834,14 @@ async function init() {
   await loadActiveTabs();
   await loadClosedLog();
   await loadPredictions();
+  await updateMemoryPressure();
+  await updateAISuggestions();
+
   if (!mlStatusTimer) {
     mlStatusTimer = setInterval(updateMLStatus, 5_000);
+  }
+  if (!memoryTimer) {
+    memoryTimer = setInterval(updateMemoryPressure, 10_000);
   }
 }
 

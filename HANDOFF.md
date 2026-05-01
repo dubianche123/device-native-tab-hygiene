@@ -122,10 +122,99 @@ child.on('close', () => {
 NODE
 ```
 
+## Categorizer v2 Architecture
+
+Three-tier classification in `extension/js/categorizer.js`:
+
+1. **DOMAIN_MAP lookup** — `extension/js/constants.js` contains 200+ hostname→category suffix mappings (e.g. `rakuten.co.jp`→finance, `zhihu.com`→reference, `oracle.com`→work). Confidence 0.98. Runs first.
+2. **Hostname keyword match** — Only the hostname (not full URL) is checked against CATEGORIES keywords. Longest match wins. Confidence 0.85. Prevents URL-path false positives.
+3. **Content signal heuristics** — DOM title/meta/headers matched against signal phrases. Score ≥ 2 required (multi-word phrases worth more). Confidence 0.70.
+
+Key rule: URL path substrings are **never** matched against category keywords. This prevents false positives like Reuters `/openai/` path matching "open" → AI category.
+
+## Holiday Calendar Module
+
+`extension/js/holidays.js` provides calendar-aware idle prediction for Japan and China.
+
+**Data**: 2025–2027 holiday lists — Japan (国民の祝日 + GW/Obon/年末年始/Silver Week extended ranges), China (法定假日 + Spring Festival/National Day extended periods).
+
+**API**:
+- `getRestDayLevel(date, calendar)` → `'holiday'` | `'weekend'` | `'weekday'`
+- `getUpcomingHolidays(calendar, count)` → next N holidays with `{name, start, end}`
+- `isHoliday(date, calendar)` → boolean
+- `CALENDAR_OPTIONS` → `[{value, label}]` for UI dropdown
+
+**Fallback heuristic tiers** (in `idle-detector.js`):
+| Tier | Window | Confidence |
+|------|--------|------------|
+| Holiday | 00:00–09:00 | 0.60 |
+| Weekend | 00:00–08:00 | 0.55 |
+| Weekday | 01:00–07:00 | 0.75 |
+
+Setting: `holidayCalendar` — `'none'` (default), `'japan'`, or `'china'`.
+
+## Test / Deploy Mode
+
+Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
+
+- **Deploy mode** (default): `performStaleCheck()` and `aiCleanup()` call `chrome.tabs.remove()`.
+- **Test mode**: Same logic, but calls `tagTab(tabId)` instead — tabs get red `🏷 TEST` badge in popup. Tagged tab IDs stored in `chrome.storage.local` under `nj:taggedTabs`.
+- Tags cleared at start of each scan (`clearAllTags()`), so each run shows fresh results.
+
+Setting: `testMode` (boolean, default `false`).
+
+## Memory Pressure & AI Cleanup
+
+**Memory bar** (popup header): Polls `chrome.system.memory.getInfo()` every 10s. Shows `used/total GB` and percentage bar. Color: green (<60%), orange (60–80%), red (≥80%).
+
+**AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
+```
+score = (100 - categoryPriority) × (idleHours / 24) × (1 / log₂(interactions + 1))
+```
+- NSFW categories get score 0 (always closed first).
+- Higher score = more likely to be closed.
+- Re-checks memory every 5 closures; stops if pressure < target.
+
+**Settings**:
+- `aiCleanupTargetMemory` — target memory % after cleanup (default 70%).
+- `aiCleanupTargetTabs` — target tab count after cleanup (default 30).
+- `aiForceCleanupThreshold` — auto-trigger AI cleanup when memory ≥ this % (default 85%). Checked every 30-min alarm cycle.
+
+## AI Suggestions Panel
+
+Below memory bar in popup. `getAISuggestion()` in background.js analyzes current state and returns suggestions with levels:
+- 🔴 `critical` — memory ≥ 90% or tabs ≥ 80.
+- 🟡 `warning` — memory ≥ 75% or tabs ≥ 50.
+- 🔵 `info` — stale tabs > 10 or memory ≥ 60%.
+- 🟢 `ok` — everything nominal.
+
+Each suggestion has `action` (button label) and `msg` (explanation). Popup renders as clickable cards that trigger the corresponding action.
+
+## Important Paths (new/changed)
+
+- Holiday module: `extension/js/holidays.js` (new)
+- Categorizer: `extension/js/categorizer.js` (rewritten)
+- Domain map: `extension/js/constants.js` → `DOMAIN_MAP` constant (new, 200+ entries)
+- Idle detector: `extension/js/idle-detector.js` (async `disconnectedStatus`, calendar-aware fallback)
+- Storage: `extension/js/storage.js` (new settings keys, tagged-tabs functions)
+- Background: `extension/js/background.js` (test mode, memory, AI cleanup, AI suggestions, force-trigger)
+- Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings)
+
+## Validation Commands (additions)
+
+```bash
+node --check extension/js/holidays.js
+```
+
+All 7 JS files pass `node --check`. CSS braces balanced (139/139). Manifest JSON valid.
+
 ## Current Operational Notes
 
 - Browser extension install is still Load Unpacked from `extension/`.
 - Full local ML requires rerunning `./scripts/install.sh <extension-id>` after the native host id rename.
 - Chrome/Edge cannot silently install a Native Messaging host from an extension package; a script, signed app, or pkg installer is still required for companion setup.
 - Core ML public APIs expose requested compute units and hardware availability, but not the exact per-inference processor. Do not claim exact ANE usage for a single inference.
-- Finalized (2026-05-01): IPC logic is perfectly synced for protocol version 2, hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is robustly handled using fallback browser heuristics.
+- `chrome.system.memory` permission added to manifest for memory pressure monitoring.
+- DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.
+- URL paths are never matched against category keywords — this is intentional to prevent false positives.
+- Finalized (2026-05-01): IPC logic is perfectly synced for protocol version 2, hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is robustly handled using fallback browser heuristics. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are all implemented and syntax-verified.

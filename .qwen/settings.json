@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(do *)",
+      "Bash(done)",
+      "Bash(python3 *)"
+    ]
+  },
+  "$version": 3
+}

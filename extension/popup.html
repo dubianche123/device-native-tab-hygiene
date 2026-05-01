@@ -16,9 +16,25 @@
       </div>
       <div class="header__actions">
         <button id="btn-force-check" class="btn btn--action" title="Check stale tabs now">Check</button>
+        <button id="btn-ai-cleanup" class="btn btn--action btn--ai" title="AI Cleanup: close low-importance tabs to meet targets">🧹 AI Clean</button>
         <button id="btn-settings" class="btn btn--icon" title="Settings">⚙️</button>
       </div>
     </header>
+
+    <!-- Mode Toggle & Memory Pressure -->
+    <div class="mode-bar">
+      <div class="mode-toggle" id="mode-toggle">
+        <button class="mode-toggle__btn mode-toggle__btn--active" id="btn-mode-deploy" data-mode="deploy" title="Deploy mode: automatically close stale tabs">🚀 Deploy</button>
+        <button class="mode-toggle__btn" id="btn-mode-test" data-mode="test" title="Test mode: learn patterns, tag stale tabs without closing">🧪 Test</button>
+      </div>
+      <div class="memory-bar" title="System memory usage">
+        <span class="memory-bar__label">MEM</span>
+        <div class="memory-bar__track">
+          <div class="memory-bar__fill" id="memory-fill" style="width: 0%"></div>
+        </div>
+        <span class="memory-bar__value" id="memory-value">--%</span>
+      </div>
+    </div>
 
     <!-- Status Bar -->
     <div class="status" id="status-bar">
@@ -31,6 +47,14 @@
         <span class="ml-device ml-device--standby">NPU</span>
         <span class="ml-device ml-device--standby">GPU</span>
         <span class="ml-device ml-device--standby">CPU</span>
+      </div>
+    </div>
+
+    <!-- AI Suggestions -->
+    <div class="ai-suggestions" id="ai-suggestions">
+      <div class="ai-suggestions__header">🤖 AI Suggestions</div>
+      <div class="ai-suggestions__list" id="ai-suggestions-list">
+        <div class="ai-suggestion ai-suggestion--ok"><span>✅</span> Checking…</div>
       </div>
     </div>
 
@@ -118,6 +142,14 @@
           <input type="checkbox" id="setting-use-companion" checked>
           <span>Use companion app (Core ML)</span>
         </label>
+        <label class="setting">
+          <span>Holiday calendar</span>
+          <select id="setting-holiday-calendar">
+            <option value="none">Off</option>
+            <option value="japan">日本 🇯🇵</option>
+            <option value="china">中国 🇨🇳</option>
+          </select>
+        </label>
         <div class="setting-group">
           <h3>Category Thresholds</h3>
           <div id="threshold-controls"></div>
@@ -125,6 +157,30 @@
         <div class="setting-group">
           <h3>Whitelist (never close)</h3>
           <textarea id="setting-whitelist" rows="3" placeholder="One domain per line…"></textarea>
+        </div>
+        <div class="setting-group">
+          <h3>AI Cleanup Targets</h3>
+          <label class="setting">
+            <span>Target memory pressure</span>
+            <div class="setting-inline">
+              <input type="range" id="setting-target-memory" min="30" max="95" step="1" value="70">
+              <span id="setting-target-memory-val" class="setting-inline__val">70%</span>
+            </div>
+          </label>
+          <label class="setting">
+            <span>Target tab count</span>
+            <div class="setting-inline">
+              <input type="range" id="setting-target-tabs" min="5" max="100" step="1" value="30">
+              <span id="setting-target-tabs-val" class="setting-inline__val">30</span>
+            </div>
+          </label>
+          <label class="setting">
+            <span>Force AI cleanup when memory ≥</span>
+            <div class="setting-inline">
+              <input type="range" id="setting-force-threshold" min="50" max="99" step="1" value="85">
+              <span id="setting-force-threshold-val" class="setting-inline__val">85%</span>
+            </div>
+          </label>
         </div>
         <button id="btn-save-settings" class="btn btn--primary">Save Settings</button>
       </div>

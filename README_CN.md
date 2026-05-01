@@ -13,13 +13,12 @@
 **作者**：Leo  
 **日期**：2026 年 5 月  
 
-Neural-Janitor 是一个智能浏览器扩展，旨在通过预测你的真实闲置时间来清理你的数字工作区。它利用 Apple 本地的机器学习技术栈（Core ML）直接在设备端学习你的使用习惯，在保持浏览器轻快运行的同时，绝不泄露你的隐私。
+Neural-Janitor 是一个基于 Apple 本地机器学习栈的智能浏览器标签页管理扩展。用户看到的是一个聪明的标签页清理工具，但这篇文档真正讨论的是一套方法：如何捕捉浏览器行为遥测数据，在本地将其压缩，并利用神经网络引擎 (NPU) 预测用户的闲置状态，而绝不触碰任何云端服务。
 
-它没有采用死板的硬编码定时器来清理旧标签页，而是基于一个核心理念：
+它背后的工程原则很简单：
+**标签页管理应该向用户学习，但这种学习必须完全在设备端发生，且几乎不消耗额外的电量。**
 
-**浏览器自动化应该安静、安全且几乎零功耗地适应用户的日常习惯。**
-
-为了实现这一点，Neural-Janitor 会在本地记录轻量级的标签页活动。macOS Swift 伴随程序将这些活动转化为训练数据，随后 Core ML 会在 Apple 神经网络引擎（NPU）上进行持续预测，以找到清理工作区的最佳时机。
+在浏览器扩展之下，系统记录轻量级的行为信号。macOS Swift 伴随程序将这些信号转化为训练数据，随后 Core ML 会在 Apple 神经网络引擎上进行持续预测，以找到清理工作区的最佳时机。
 
 ## 运行时数据流
 
@@ -141,4 +140,4 @@ chmod +x scripts/install.sh
 
 Neural-Janitor 测试了一个架构判断：我们不需要为每个智能功能都依赖云端 LLM。通过将 Manifest V3 的事件驱动架构与 macOS 的原生 ML 能力相结合，我们可以实现一种私密、高性能且深度集成到操作系统的上下文感知自动化管理。
 
-<p align="center"><sub>Neural-Janitor: Edge-Accelerated Tab Hygiene</sub></p>
+<p align="center"><sub>Neural-Janitor: Edge-Accelerated Tab Hygiene — The Chronos Engine</sub></p>

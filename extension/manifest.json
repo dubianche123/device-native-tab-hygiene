@@ -10,7 +10,8 @@
     "notifications",
     "nativeMessaging",
     "idle",
-    "sessions"
+    "sessions",
+    "system.memory"
   ],
   "background": {
     "service_worker": "js/background.js",

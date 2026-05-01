@@ -223,7 +223,7 @@ final class IdlePredictor {
         return "fallback"
     }
 
-    func predict() -> [IdlePrediction] {
+    func predict(holidayLevel: Int = 0) -> [IdlePrediction] {
         maybeTrainIfNeeded()
         lastInferenceAt = Date()
         inferenceCount += 1
@@ -234,7 +234,7 @@ final class IdlePredictor {
             var samples: [(hour: Double, prob: Double)] = []
             for hour in 0..<24 {
                 for minute in stride(from: 0, to: 60, by: 15) {
-                    let prob = probability(day: day, hour: hour, minute: minute, events: eventsForPrediction)
+                    let prob = probability(day: day, hour: hour, minute: minute, events: eventsForPrediction, holidayLevel: holidayLevel)
                     samples.append((Double(hour) + Double(minute) / 60.0, prob))
                 }
             }
@@ -248,7 +248,11 @@ final class IdlePredictor {
                     confidence: best.avgConfidence
                 ))
             } else {
-                predictions.append(IdlePrediction(day: day, startHour: 1.0, endHour: 7.0, confidence: 0.25))
+                // If no contiguous block above threshold, check the heuristic
+                // Use a default window for the day based on heuristic
+                let hStart = holidayLevel >= 2 ? 0.0 : (holidayLevel >= 1 ? 0.0 : 1.0)
+                let hEnd = holidayLevel >= 2 ? 9.0 : (holidayLevel >= 1 ? 8.0 : 7.0)
+                predictions.append(IdlePrediction(day: day, startHour: hStart, endHour: hEnd, confidence: 0.25))
             }
         }
         return predictions
@@ -283,24 +287,13 @@ final class IdlePredictor {
         writeLog("Idle predictor trained via Create ML and loaded through Core ML")
     }
 
-    func healthPayload(activityCount: Int) -> [String: Any] {
-        refreshMetricsIfNeeded(activityCount: activityCount)
-
-        let runtime: String
-        let runtimeLabel: String
-        if model != nil {
-            runtime = "coreml"
-            runtimeLabel = "Core ML Auto"
-        } else if !lookup.isEmpty {
-            runtime = "lookup"
-            runtimeLabel = "CPU Lookup"
-        } else {
-            runtime = "heuristic"
-            runtimeLabel = "CPU Heuristic"
+    func healthPayload(activityCount: Int, holidayLevel: Int = 0) -> [String: Any] {
+        if let lastMetricsRefresh, Date().timeIntervalSince(lastMetricsRefresh) > 15 * 60 {
+            refreshMetricsIfNeeded(activityCount: activityCount)
         }
 
         let usingCoreML = model != nil
-        let decision = decisionSnapshot()
+        let decision = decisionSnapshot(holidayLevel: holidayLevel)
         let matureSamples = max(metrics.trainingSamples, activityCount)
         let maturity = min(1.0, Double(matureSamples) / 1_000.0)
         let devices = localDeviceStatus(usingCoreML: usingCoreML)
@@ -316,8 +309,8 @@ final class IdlePredictor {
             "ok": true,
             "modelMode": mode,
             "modelLoaded": usingCoreML,
-            "runtime": runtime,
-            "runtimeLabel": runtimeLabel,
+            "runtime": (model != nil ? "coreml" : (!lookup.isEmpty ? "lookup" : "heuristic")),
+            "runtimeLabel": (model != nil ? "Core ML Auto" : (!lookup.isEmpty ? "CPU Lookup" : "CPU Heuristic")),
             "computeUnits": usingCoreML ? "all" : "cpu",
             "activityCount": activityCount,
             "trainingSamples": matureSamples,
@@ -446,19 +439,26 @@ final class IdlePredictor {
         }
     }
 
-    private func probability(day: Int, hour: Int, minute: Int, events: [ActivityEvent]) -> Double {
+    private func probability(day: Int, hour: Int, minute: Int, events: [ActivityEvent], holidayLevel: Int = 0) -> Double {
         if let model = model {
-            return runInference(model: model, features: predictionFeatures(day: day, hour: hour, minute: minute, events: events))
+            return runInference(model: model, features: TrainingSample(timestamp: 0, hour: hour, minute: minute, dayOfWeek: day, label: ""))
         }
-
+        
         if let prob = lookup["\(day)_\(hour)"] {
             return prob
         }
-
-        return (hour >= 1 && hour < 7) ? 0.75 : 0.20
+        
+        let h = Double(hour) + Double(minute) / 60.0
+        if holidayLevel >= 2 {
+            return h < 9.0 ? 0.60 : 0.30
+        } else if holidayLevel >= 1 {
+            return h < 8.0 ? 0.55 : 0.25
+        } else {
+            return (hour >= 1 && hour < 7) ? 0.75 : 0.20
+        }
     }
 
-    private func decisionSnapshot() -> [String: Any] {
+    private func decisionSnapshot(holidayLevel: Int = 0) -> [String: Any] {
         let events = store.all()
         let calendar = Calendar.current
         let now = Date()
@@ -466,7 +466,7 @@ final class IdlePredictor {
         let day = (comps.weekday ?? 1) - 1
         let hour = comps.hour ?? 0
         let minute = comps.minute ?? 0
-        let current = probability(day: day, hour: hour, minute: minute, events: events)
+        let current = probability(day: day, hour: hour, minute: minute, events: events, holidayLevel: holidayLevel)
 
         var curve: [[String: Any]] = []
         for offset in stride(from: 0, through: 180, by: 30) {
@@ -479,7 +479,7 @@ final class IdlePredictor {
                 "offsetMinutes": offset,
                 "hour": h,
                 "minute": m,
-                "confidence": probability(day: d, hour: h, minute: m, events: events),
+                "confidence": probability(day: d, hour: h, minute: m, events: events, holidayLevel: holidayLevel),
             ])
         }
 
@@ -881,11 +881,12 @@ final class LocalPageClassifier {
         "nsfw": ["adult", "explicit", "nsfw", "xxx", "erotic", "cam", "fetish", "porn", "hentai"],
         "finance": [
             "bank", "banking", "brokerage", "portfolio", "credit", "mortgage", "invoice", "payment", "transaction", "crypto", "investment", "trading",
-            "mufg", "smbc", "mizuhobank", "rakuten-sec", "sbisec", "monex", "jpx", "alipay", "tenpay", "eastmoney", "xueqiu", "futunn", "tigerbrokers",
-            "銀行", "証券", "投資", "株価", "資産", "口座", "決済", "银行", "证券", "投资", "股票", "基金", "理财", "支付", "账单",
+            "mufg", "smbc", "mizuhobank", "rakuten-sec", "sbisec", "monex", "jpx", "alipay", "tenpay", "eastmoney", "xueqiu", "futunn", "tigerbrokers", "rakuten-card",
+            "銀行", "証券", "投資", "株価", "資産", "口座", "決済", "银行", "证券", "投资", "股票", "基金", "理财", "支付", "账单", "财富",
+            "invest", "stock", "investor", "dividend", "equity", "portfolio",
         ],
         "ai": [
-            "chatgpt", "openai", "claude", "anthropic", "gemini", "deepseek", "hugging face", "huggingface", "perplexity", "copilot", "mistral", "qwen", "kimi", "doubao", "chatglm", "grok", "phind", "openrouter", "lmarena", "replicate", "cursor", "windsurf", "prompt", "assistant", "llm", "large language model", "model card", "transformers", "inference", "ai studio", "model playground",
+            "chatgpt", "openai", "claude", "anthropic", "gemini", "deepseek", "hugging face", "huggingface", "perplexity", "copilot", "mistral", "qwen", "kimi", "doubao", "chatglm", "grok", "phind", "openrouter", "lmarena", "replicate", "cursor", "windsurf", "prompt", "assistant", "llm", "large language model", "model card", "transformers", "inference", "ai studio", "model playground", "openai.com", "claude.ai", "perplexity.ai",
             "yiyan", "wenxin", "tongyi", "yuanbao", "zhipuai", "bigmodel", "baichuan-ai", "minimax", "coze", "dify",
             "生成ai", "人工知能", "チャット", "プロンプト", "大規模言語モデル", "生成式ai", "人工智能", "提示词", "大语言模型", "智能体",
         ],
@@ -901,7 +902,7 @@ final class LocalPageClassifier {
         ],
         "social": [
             "profile", "followers", "following", "feed", "timeline", "post", "comments", "community", "likes",
-            "weibo", "xiaohongshu", "zhihu", "douban", "tieba", "5ch", "2ch", "mixi",
+            "weibo", "xiaohongshu", "douban", "tieba", "5ch", "2ch", "mixi",
             "フォロー", "プロフィール", "投稿", "コメント", "コミュニティ", "关注", "粉丝", "主页", "帖子", "评论", "社区", "动态",
         ],
         "news": [
@@ -921,8 +922,8 @@ final class LocalPageClassifier {
         ],
         "reference": [
             "documentation", "tutorial", "reference", "manual", "guide", "course", "lesson", "api", "wiki", "stackoverflow",
-            "baike", "wikipedia", "csdn", "cnblogs", "juejin", "segmentfault", "oschina", "teratail", "note.com", "hatena", "kotobank", "weblio", "developer.aliyun", "cloud.tencent", "infoq.cn", "sspai",
-            "百科", "辞書", "解説", "使い方", "講座", "学習", "词条", "教程", "指南", "文档", "学习", "课程", "知识库",
+            "baike", "wikipedia", "csdn", "cnblogs", "juejin", "segmentfault", "oschina", "teratail", "note.com", "hatena", "kotobank", "weblio", "developer.aliyun", "cloud.tencent", "infoq.cn", "sspai", "zhihu", "weread", "duolingo", "cambridge dictionary",
+            "百科", "辞書", "解説", "使い方", "講座", "学習", "词条", "教程", "指南", "文档", "学习", "课程", "知识库", "知乎", "微信读书",
         ],
     ]
 
@@ -1025,7 +1026,8 @@ while true {
         ])
 
     case "predict":
-        let predictions = predictor.predict()
+        let holidayLevel = (message["holidayLevel"] as? Int) ?? 0
+        let predictions = predictor.predict(holidayLevel: holidayLevel)
         var predDict: [String: Any] = [:]
         for pred in predictions {
             predDict["\(pred.day)"] = [
@@ -1042,7 +1044,7 @@ while true {
             "predictions": predDict,
             "modelMode": predictor.mode,
             "activityCount": store.count,
-            "health": predictor.healthPayload(activityCount: store.count),
+            "health": predictor.healthPayload(activityCount: store.count, holidayLevel: (message["holidayLevel"] as? Int) ?? 0),
         ])
 
     case "retrain":
@@ -1068,7 +1070,8 @@ while true {
         }
 
     case "health":
-        var payload = predictor.healthPayload(activityCount: store.count)
+        let holidayLevel = (message["holidayLevel"] as? Int) ?? 0
+        var payload = predictor.healthPayload(activityCount: store.count, holidayLevel: holidayLevel)
         payload["version"] = "1.0.0"
         writeMessage(payload)
 

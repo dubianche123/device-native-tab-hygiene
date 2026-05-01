@@ -17,7 +17,8 @@ import {
   IPC_PROTOCOL_VERSION,
   NATIVE_HOST_NAME,
 } from './constants.js';
-import { getIdlePredictions, setIdlePredictions, getCompanionStatus, setCompanionStatus } from './storage.js';
+import { getIdlePredictions, setIdlePredictions, getCompanionStatus, setCompanionStatus, getSettings } from './storage.js';
+import { getRestDayLevel } from './holidays.js';
 
 let nativePort = null;
 let companionQueue = Promise.resolve();
@@ -32,7 +33,7 @@ export function connectToCompanion() {
       const error = chrome.runtime.lastError?.message || 'Native Messaging port disconnected';
       console.warn('[Neural-Janitor] Companion disconnected:', error);
       nativePort = null;
-      setCompanionStatus(disconnectedStatus(error));
+      disconnectedStatus(error).then(s => setCompanionStatus(s));
     });
     setCompanionStatus({
       connected: true,
@@ -46,7 +47,7 @@ export function connectToCompanion() {
   } catch (err) {
     console.warn('[Neural-Janitor] Could not connect to companion:', err.message);
     nativePort = null;
-    setCompanionStatus(disconnectedStatus(err.message));
+    disconnectedStatus(err.message).then(s => setCompanionStatus(s));
   }
 }
 
@@ -177,7 +178,10 @@ export async function recordActivity(activity) {
 export async function requestPredictions() {
   if (!nativePort) connectToCompanion();
   try {
-    const response = await sendToCompanion({ type: 'predict' });
+    const settings = await getSettings();
+    const calendar = settings.holidayCalendar || 'none';
+    const holidayLevel = getRestDayLevel(new Date(), calendar);
+    const response = await sendToCompanion({ type: 'predict', holidayLevel });
     if (response?.predictions) {
       await setIdlePredictions(response.predictions);
       if (response.modelMode) {
@@ -192,7 +196,7 @@ export async function requestPredictions() {
       return response.predictions;
     }
   } catch (err) {
-    const status = disconnectedStatus(err.message);
+    const status = await disconnectedStatus(err.message);
     await setCompanionStatus(status);
   }
   return getFallbackPredictions();
@@ -204,7 +208,10 @@ export async function requestPredictions() {
 export async function requestCompanionHealth() {
   if (!nativePort) connectToCompanion();
   try {
-    const response = await sendToCompanion({ type: 'health' });
+    const settings = await getSettings();
+    const calendar = settings.holidayCalendar || 'none';
+    const holidayLevel = getRestDayLevel(new Date(), calendar);
+    const response = await sendToCompanion({ type: 'health', holidayLevel });
     if (response?.type === 'health') {
       const status = {
         connected: true,
@@ -217,13 +224,13 @@ export async function requestCompanionHealth() {
       return normalized;
     }
   } catch (err) {
-    const status = disconnectedStatus(err.message);
+    const status = await disconnectedStatus(err.message);
     await setCompanionStatus(status);
     return status;
   }
 
   const status = await getCompanionStatus();
-  return status.connected ? status : disconnectedStatus();
+  return status.connected ? status : await disconnectedStatus();
 }
 
 /**
@@ -244,8 +251,13 @@ export async function isInIdleWindow() {
     return hour >= pred.startHour && hour < pred.endHour;
   }
 
-  // Fallback heuristic
-  return hour >= 1 && hour < 7;
+  // Fallback heuristic — calendar-aware
+  const settings = await getSettings();
+  const calendar = settings.holidayCalendar || 'none';
+  const restLevel = getRestDayLevel(now, calendar);
+  if (restLevel === 2) return hour < 9;       // Holiday: idle before 09:00
+  if (restLevel === 1) return hour < 8;       // Weekend: idle before 08:00
+  return hour >= 1 && hour < 7;               // Weekday: idle 01:00–07:00
 }
 
 /**
@@ -264,11 +276,27 @@ export async function classifyURL(input) {
 
 // ── Fallback heuristic ────────────────────────────────────────────────
 
-function getFallbackPredictions() {
-  // Conservative: assume idle 01:00–07:00 every day
+async function getFallbackPredictions() {
+  const settings = await getSettings();
+  const calendar = settings.holidayCalendar || 'none';
   const predictions = {};
+
   for (let d = 0; d < 7; d++) {
-    predictions[d] = { startHour: 1, endHour: 7, confidence: 0.3 };
+    const now = new Date();
+    const dayOffset = (d - now.getDay() + 7) % 7;
+    const target = new Date(now.getTime() + dayOffset * 86_400_000);
+    const restLevel = getRestDayLevel(target, calendar);
+
+    if (restLevel === 2) {
+      // Holiday: wider idle window, higher confidence
+      predictions[d] = { startHour: 0, endHour: 9, confidence: 0.55 };
+    } else if (restLevel === 1) {
+      // Weekend: slightly wider window
+      predictions[d] = { startHour: 0, endHour: 8, confidence: 0.40 };
+    } else {
+      // Weekday
+      predictions[d] = { startHour: 1, endHour: 7, confidence: 0.3 };
+    }
   }
   return predictions;
 }
@@ -290,7 +318,7 @@ function diagnoseNativeDisconnect(error = null) {
   return error ? 'native_link_error' : 'native_link_offline';
 }
 
-function disconnectedStatus(error = null) {
+async function disconnectedStatus(error = null) {
   const disconnectReason = diagnoseNativeDisconnect(error);
   const devices = [
     {
@@ -333,8 +361,8 @@ function disconnectedStatus(error = null) {
     modelMaturity: 0,
     modelAccuracy: null,
     readinessReason: 'Native link offline; NPU telemetry unavailable, using browser CPU heuristic',
-    currentIdleConfidence: fallbackConfidenceNow(),
-    confidenceCurve: fallbackConfidenceCurve(),
+    currentIdleConfidence: await fallbackConfidenceNow(),
+    confidenceCurve: await fallbackConfidenceCurve(),
     decisionThreshold: 0.55,
     powerMode: 'low',
     powerSignal: 'standby',
@@ -357,23 +385,50 @@ function disconnectedStatus(error = null) {
   };
 }
 
-function fallbackConfidenceNow() {
+async function fallbackConfidenceNow() {
   const now = new Date();
   const hour = now.getHours() + now.getMinutes() / 60;
+  const settings = await getSettings();
+  const calendar = settings.holidayCalendar || 'none';
+  const restLevel = getRestDayLevel(now, calendar);
+
+  if (restLevel === 2) {
+    // Holiday: 00:00–09:00 → 0.60, otherwise 0.30
+    return hour < 9 ? 0.60 : 0.30;
+  }
+  if (restLevel === 1) {
+    // Weekend: 00:00–08:00 → 0.55, otherwise 0.25
+    return hour < 8 ? 0.55 : 0.25;
+  }
+  // Weekday
   return hour >= 1 && hour < 7 ? 0.75 : 0.20;
 }
 
-function fallbackConfidenceCurve() {
+async function fallbackConfidenceCurve() {
   const now = new Date();
-  return Array.from({ length: 7 }, (_, index) => {
+  const settings = await getSettings();
+  const calendar = settings.holidayCalendar || 'none';
+
+  return Promise.all(Array.from({ length: 7 }, async (_, index) => {
     const offsetMinutes = index * 30;
     const date = new Date(now.getTime() + offsetMinutes * 60_000);
     const hourValue = date.getHours() + date.getMinutes() / 60;
+    const restLevel = getRestDayLevel(date, calendar);
+
+    let confidence;
+    if (restLevel === 2) {
+      confidence = hourValue < 9 ? 0.60 : 0.30;
+    } else if (restLevel === 1) {
+      confidence = hourValue < 8 ? 0.55 : 0.25;
+    } else {
+      confidence = hourValue >= 1 && hourValue < 7 ? 0.75 : 0.20;
+    }
+
     return {
       offsetMinutes,
       hour: date.getHours(),
       minute: date.getMinutes(),
-      confidence: hourValue >= 1 && hourValue < 7 ? 0.75 : 0.20,
+      confidence,
     };
-  });
+  }));
 }

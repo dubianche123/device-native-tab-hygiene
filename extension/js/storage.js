@@ -191,6 +191,11 @@ const DEFAULT_SETTINGS = {
   customThresholds: {},
   useCompanion: true,
   whitelist: [],
+  holidayCalendar: 'none',
+  testMode: false,
+  aiCleanupTargetMemory: 70,
+  aiCleanupTargetTabs: 30,
+  aiForceCleanupThreshold: 85,
 };
 
 export async function getSettings() {
@@ -236,4 +241,31 @@ export async function setCompanionStatus(status) {
 export async function exportClosedLogAsJSON() {
   const log = await getClosedLog();
   return JSON.stringify(log, null, 2);
+}
+
+// ── Tagged Tabs (test-mode markers) ──────────────────────────────────
+
+export async function getTaggedTabs() {
+  const data = await chrome.storage.local.get(STORAGE_KEYS.TAGGED_TABS);
+  return data[STORAGE_KEYS.TAGGED_TABS] || {};
+}
+
+export async function setTaggedTabs(tagged) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.TAGGED_TABS]: tagged });
+}
+
+export async function tagTab(tabId, info) {
+  const tagged = await getTaggedTabs();
+  tagged[tabId] = { ...info, taggedAt: Date.now() };
+  await chrome.storage.local.set({ [STORAGE_KEYS.TAGGED_TABS]: tagged });
+}
+
+export async function untagTab(tabId) {
+  const tagged = await getTaggedTabs();
+  delete tagged[tabId];
+  await chrome.storage.local.set({ [STORAGE_KEYS.TAGGED_TABS]: tagged });
+}
+
+export async function clearAllTags() {
+  await chrome.storage.local.remove(STORAGE_KEYS.TAGGED_TABS);
 }

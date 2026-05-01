@@ -25,6 +25,7 @@ import {
   markClosedRecordRestored,
   getReturnNotification, setReturnNotification, clearReturnNotification,
   getActiveSession, setActiveSession, clearActiveSession,
+  getTaggedTabs, tagTab, untagTab, clearAllTags,
 } from './storage.js';
 import { categorizePage, isTabStale } from './categorizer.js';
 import {
@@ -304,6 +305,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'nj-stale-check') {
     console.log('[Neural-Janitor] Periodic stale-tab check triggered');
     await performStaleCheck();
+
+    // Force-trigger AI cleanup if memory exceeds threshold
+    const settings = await getSettings();
+    if (settings.enabled) {
+      const mem = await getMemoryPressure();
+      const forceThreshold = settings.aiForceCleanupThreshold || 85;
+      if (mem.percent >= forceThreshold) {
+        console.log(`[Neural-Janitor] Memory at ${mem.percent}% >= force threshold ${forceThreshold}% — auto-triggering AI cleanup`);
+        await aiCleanup();
+      }
+    }
   } else if (alarm.name === 'nj-companion-sync') {
     const settings = await getSettings();
     if (settings.useCompanion !== false) await requestPredictions();
@@ -427,12 +439,17 @@ async function performStaleCheck() {
   const registry = await getTabRegistry();
   const now = Date.now();
   const closedTabs = [];
+  const taggedTabs = [];
   let staleCount = 0;
   let deferredCount = 0;
   const active = await getActiveSession();
   const predictedIdle = settings.useCompanion !== false ? await isInIdleWindow() : false;
   const currentlyIdle = await browserIsIdle();
   const closeWindowIsQuiet = predictedIdle || currentlyIdle;
+  const testMode = settings.testMode === true;
+
+  // Clear previous tags at the start of each test-mode scan
+  if (testMode) await clearAllTags();
 
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
@@ -464,7 +481,25 @@ async function performStaleCheck() {
       continue;
     }
 
-    // Attempt to close the tab
+    if (testMode) {
+      // Test mode: tag the tab instead of closing it
+      await tagTab(tabId, {
+        reason: `stale_${Math.round(result.ageMs / (1000 * 60 * 60))}h`,
+        category: categoryKey,
+        title: entry.title || '',
+        url: entry.url || '',
+      });
+      taggedTabs.push({
+        tabId,
+        url: entry.url,
+        title: entry.title,
+        category: categoryKey,
+        ageMs: result.ageMs,
+      });
+      continue;
+    }
+
+    // Deploy mode: actually close the tab
     try {
       await chrome.tabs.remove(tabId);
     } catch {
@@ -506,15 +541,256 @@ async function performStaleCheck() {
     console.log(`[Neural-Janitor] Closed ${closedTabs.length} stale tab(s). Return notification queued.`);
   }
 
+  if (testMode && taggedTabs.length > 0) {
+    console.log(`[Neural-Janitor] Test mode: tagged ${taggedTabs.length} stale tab(s).`);
+  }
+
   return {
     ok: true,
     disabled: false,
+    testMode,
     scannedCount: Object.keys(registry).length,
     staleCount,
     deferredCount,
-    closedCount: closedTabs.length,
+    closedCount: testMode ? 0 : closedTabs.length,
+    taggedCount: testMode ? taggedTabs.length : 0,
     closeWindowIsQuiet,
   };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// MEMORY PRESSURE & AI CLEANUP
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Read system memory usage via chrome.system.memory API.
+ * Returns { usedCapacity, capacity, percent } in bytes / 0-100.
+ */
+async function getMemoryPressure() {
+  try {
+    const info = await chrome.system.memory.getInfo();
+    const used = info.capacity - info.availableCapacity;
+    return {
+      usedCapacity: used,
+      capacity: info.capacity,
+      availableCapacity: info.availableCapacity,
+      percent: Math.round((used / info.capacity) * 100),
+    };
+  } catch {
+    return { usedCapacity: 0, capacity: 0, availableCapacity: 0, percent: 0 };
+  }
+}
+
+/**
+ * AI Cleanup: close tabs by importance until memory pressure and tab count
+ * targets are met. Tabs are ranked by a composite score:
+ *   category priority (lower = less important) × idle age × (1 / interactions)
+ */
+async function aiCleanup() {
+  const settings = await getSettings();
+  const targetMemory = settings.aiCleanupTargetMemory || 70;
+  const targetTabs = settings.aiCleanupTargetTabs || 30;
+
+  const mem = await getMemoryPressure();
+  const registry = await getTabRegistry();
+  const tabCount = Object.keys(registry).length;
+  const active = await getActiveSession();
+  const now = Date.now();
+
+  // Already under targets?
+  if (mem.percent <= targetMemory && tabCount <= targetTabs) {
+    return {
+      ok: true,
+      action: 'none',
+      memoryBefore: mem.percent,
+      tabCountBefore: tabCount,
+      closedCount: 0,
+      message: 'Already within targets',
+    };
+  }
+
+  // Build scored list of closeable tabs
+  const candidates = [];
+  for (const [tabIdStr, entry] of Object.entries(registry)) {
+    const tabId = parseInt(tabIdStr, 10);
+    if (active?.tabId === tabId) continue;
+    if (settings.whitelist.some(w => entry.url?.includes(w))) continue;
+
+    const catInfo = CATEGORIES[entry.category] || {};
+    const priority = catInfo.priority ?? 50;
+    const idleMs = now - (entry.lastVisited || now);
+    const idleHours = Math.max(1, idleMs / (1000 * 60 * 60));
+    const interactions = Math.max(1, entry.interactions || 0);
+
+    // Score: lower = close first. NSFW always scores 0.
+    const score = entry.category === 'nsfw'
+      ? 0
+      : (100 - priority) * (idleHours / 24) * (1 / Math.log2(interactions + 1));
+
+    candidates.push({ tabId, entry, score, idleMs });
+  }
+
+  // Sort by score ascending (least important first)
+  candidates.sort((a, b) => a.score - b.score);
+
+  const closedTabs = [];
+  let currentMem = mem.percent;
+  let currentCount = tabCount;
+  const testMode = settings.testMode === true;
+
+  if (testMode) await clearAllTags();
+
+  for (const { tabId, entry, idleMs } of candidates) {
+    // Stop if both targets are met
+    if (currentMem <= targetMemory && currentCount <= targetTabs) break;
+
+    if (testMode) {
+      await tagTab(tabId, {
+        reason: 'ai_cleanup',
+        category: entry.category || 'other',
+        title: entry.title || '',
+        url: entry.url || '',
+      });
+      currentCount--;
+      closedTabs.push({ tabId, url: entry.url, title: entry.title, tagged: true });
+      continue;
+    }
+
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch { /* already closed */ }
+
+    const categoryKey = entry.category || 'other';
+    const sessionId = await findRecentlyClosedSession(entry.url);
+    await appendClosedRecord({
+      url: entry.url,
+      title: entry.title,
+      favIconUrl: entry.favIconUrl || '',
+      category: categoryKey,
+      sessionId,
+      closedAt: now,
+      reason: 'ai_cleanup',
+      lastVisited: entry.lastVisited,
+      ageMs: idleMs,
+      dwellMs: entry.dwellMs || 0,
+      interactions: entry.interactions || 0,
+    });
+    await removeTabEntry(tabId);
+
+    currentCount--;
+    closedTabs.push({ url: entry.url, title: entry.title, tagged: false });
+
+    // Re-check memory after every 5 closures
+    if (closedTabs.length % 5 === 0) {
+      const freshMem = await getMemoryPressure();
+      currentMem = freshMem.percent;
+    }
+  }
+
+  if (!testMode && closedTabs.length > 0) {
+    await setReturnNotification({
+      pending: true,
+      closedTabs: closedTabs.filter(t => !t.tagged),
+    });
+  }
+
+  return {
+    ok: true,
+    action: testMode ? 'tagged' : 'closed',
+    memoryBefore: mem.percent,
+    tabCountBefore: tabCount,
+    closedCount: testMode ? 0 : closedTabs.length,
+    taggedCount: testMode ? closedTabs.length : 0,
+    tabCountAfter: currentCount,
+    message: testMode
+      ? `Tagged ${closedTabs.length} tab(s) for cleanup`
+      : `Closed ${closedTabs.length} tab(s)`,
+  };
+}
+
+/**
+ * Analyse current state and return actionable suggestions.
+ * Returns { suggestions: [{ level, icon, text, action? }], mem, tabCount }.
+ */
+async function getAISuggestion() {
+  const settings = await getSettings();
+  const mem = await getMemoryPressure();
+  const tabCount = await getTabCount();
+  const targetMem = settings.aiCleanupTargetMemory || 70;
+  const targetTabs = settings.aiCleanupTargetTabs || 30;
+  const forceThreshold = settings.aiForceCleanupThreshold || 85;
+
+  const suggestions = [];
+
+  // Memory pressure suggestions
+  if (mem.percent >= forceThreshold) {
+    suggestions.push({
+      level: 'critical',
+      icon: '🔴',
+      text: `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%). Run AI Cleanup now.`,
+      action: 'aiCleanup',
+    });
+  } else if (mem.percent >= targetMem + 10) {
+    suggestions.push({
+      level: 'warning',
+      icon: '🟠',
+      text: `Memory at ${mem.percent}% — well above target (${targetMem}%). Consider AI Cleanup.`,
+      action: 'aiCleanup',
+    });
+  } else if (mem.percent >= targetMem) {
+    suggestions.push({
+      level: 'info',
+      icon: '🟡',
+      text: `Memory at ${mem.percent}% — slightly above target (${targetMem}%).`,
+    });
+  }
+
+  // Tab count suggestions
+  if (tabCount > targetTabs * 2) {
+    suggestions.push({
+      level: 'warning',
+      icon: '📑',
+      text: `${tabCount} open tabs — over 2× your target (${targetTabs}). Close some or run AI Cleanup.`,
+      action: 'aiCleanup',
+    });
+  } else if (tabCount > targetTabs) {
+    suggestions.push({
+      level: 'info',
+      icon: '📋',
+      text: `${tabCount} open tabs — above your target (${targetTabs}).`,
+    });
+  }
+
+  // Stale tabs suggestion
+  const registry = await getTabRegistry();
+  const active = await getActiveSession();
+  let staleCount = 0;
+  for (const [tabIdStr, entry] of Object.entries(registry)) {
+    const tabId = parseInt(tabIdStr, 10);
+    if (active?.tabId === tabId) continue;
+    const cat = entry.category || 'other';
+    const result = isTabStale(entry.lastVisited, cat, settings.customThresholds);
+    if (result.stale) staleCount++;
+  }
+  if (staleCount > 0) {
+    suggestions.push({
+      level: 'info',
+      icon: '🧹',
+      text: `${staleCount} stale tab(s) detected. Run "Check" or AI Cleanup to clear them.`,
+      action: 'forceCheck',
+    });
+  }
+
+  // All clear
+  if (suggestions.length === 0) {
+    suggestions.push({
+      level: 'ok',
+      icon: '✅',
+      text: 'Everything looks healthy. No action needed.',
+    });
+  }
+
+  return { suggestions, memPercent: mem.percent, tabCount, targetMem, targetTabs, forceThreshold };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -675,6 +951,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       case 'closeTrackedTab':
         sendResponse(await closeTrackedTab(msg.tabId, msg.reason));
+        break;
+      case 'getMemoryPressure':
+        sendResponse(await getMemoryPressure());
+        break;
+      case 'aiCleanup':
+        sendResponse(await aiCleanup());
+        break;
+      case 'getTaggedTabs':
+        sendResponse(await getTaggedTabs());
+        break;
+      case 'getAISuggestion':
+        sendResponse(await getAISuggestion());
         break;
       case 'recordActivity':
         if (sender.tab) {

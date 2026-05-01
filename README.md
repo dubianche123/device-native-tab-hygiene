@@ -13,13 +13,12 @@
 **Author**: Leo  
 **Date**: May 2026  
 
-Neural-Janitor is an intelligent browser extension that cleans up your digital workspace by predicting your actual idle time. It leverages Apple's local Machine Learning stack (Core ML) to learn your habits directly on-device, keeping your browser fast without compromising your privacy.
+Neural-Janitor is an intelligent browser tab management extension powered by Apple's local machine learning stack. To the user, it is a smart cleanup tool; to the engineer, it is a methodology for capturing browser telemetry, compressing it locally, and utilizing the Neural Engine (NPU) to predict user idle states without ever touching a cloud service.
 
-Instead of relying on rigid, hardcoded timers to close old tabs, the project is guided by a core idea:
+Its architectural principle is simple:
+**Tab management should learn from the user, but that learning must happen entirely on-device with near-zero power consumption.**
 
-**Browser automation should adapt to the user's routine quietly, securely, and with near-zero power cost.**
-
-To achieve this, Neural-Janitor tracks lightweight tab activity entirely locally. The macOS Swift companion app translates this activity into training data, and Core ML runs continuous predictions on the Apple Neural Engine (NPU) to find the perfect moment to clean up your workspace.
+Underneath the browser extension, the system records lightweight behavioral signals. The macOS Swift companion app translates these into training data, and Core ML runs continuous predictions on the Apple Neural Engine to identify the optimal moments for workspace hygiene.
 
 ## Runtime Dataflow
 
@@ -141,4 +140,4 @@ Restart your browser. The companion will automatically start.
 
 Neural-Janitor tests an architectural stance: we don't need cloud LLMs for every intelligent feature. By combining Manifest V3's event-driven architecture with macOS's native ML capabilities, we can achieve context-aware automation that is private, performant, and deeply integrated into the operating system.
 
-<p align="center"><sub>Neural-Janitor: Edge-Accelerated Tab Hygiene</sub></p>
+<p align="center"><sub>Neural-Janitor: Edge-Accelerated Tab Hygiene — The Chronos Engine</sub></p>

@@ -153,6 +153,106 @@ body {
   background: var(--accent-light);
 }
 
+.btn--ai {
+  background: linear-gradient(135deg, #8e44ad, #3498db);
+  color: #fff;
+  font-size: 11px;
+}
+
+.btn--ai:hover {
+  background: linear-gradient(135deg, #9b59b6, #2980b9);
+}
+
+.btn--ai:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* ── Mode Toggle & Memory Bar ─────────────────────────────────── */
+
+.mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+}
+
+.mode-toggle {
+  display: flex;
+  background: var(--surface);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.mode-toggle__btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.mode-toggle__btn--active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-toggle__btn:not(.mode-toggle__btn--active):hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+.memory-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-bar__label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.memory-bar__track {
+  flex: 1;
+  height: 6px;
+  background: var(--surface);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 40px;
+}
+
+.memory-bar__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.5s ease, background 0.5s ease;
+}
+
+.memory-bar__value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 /* ── Status Bar ─────────────────────────────────────────────────── */
 
 .status {
@@ -190,6 +290,12 @@ body {
 .status__dot--active { background: var(--success); }
 .status__dot--idle { background: var(--warning); }
 .status__dot--error { background: var(--danger); }
+.status__dot--test { background: #f1c40f; animation: pulse-test 2s ease-in-out infinite; }
+
+@keyframes pulse-test {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 
 .ml-status {
   display: flex;
@@ -240,6 +346,98 @@ body {
   color: #ff9a90;
   border-color: rgba(231, 76, 60, 0.55);
   background: rgba(231, 76, 60, 0.12);
+}
+
+/* ── AI Suggestions ─────────────────────────────────────────────── */
+
+.ai-suggestions {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 10px;
+}
+
+.ai-suggestions__header {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.ai-suggestions__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.ai-suggestion--critical {
+  background: rgba(231, 76, 60, 0.12);
+  color: #e74c3c;
+}
+
+.ai-suggestion--warning {
+  background: rgba(243, 156, 18, 0.12);
+  color: #f39c12;
+}
+
+.ai-suggestion--info {
+  background: rgba(52, 152, 219, 0.1);
+  color: #3498db;
+}
+
+.ai-suggestion--ok {
+  background: rgba(39, 174, 96, 0.1);
+  color: #27ae60;
+}
+
+.ai-suggestion__action {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.btn--xs {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.btn--xs:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* ── Setting Inline Controls ────────────────────────────────────── */
+
+.setting-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.setting-inline input[type="range"] {
+  width: 80px;
+  accent-color: var(--accent);
+}
+
+.setting-inline__val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 28px;
+  text-align: right;
 }
 
 .ml-console {
@@ -445,6 +643,26 @@ body {
   background: var(--bg-hover);
 }
 
+.tab-item--tagged {
+  border-left: 3px solid #e74c3c;
+  background: rgba(231, 76, 60, 0.06);
+}
+
+.tab-item--tagged:hover {
+  background: rgba(231, 76, 60, 0.1);
+}
+
+.tab-item__tag-badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
 .tab-item__favicon {
   width: 16px;
   height: 16px;
@@ -543,6 +761,9 @@ body {
   font-weight: 600;
   font-size: 12px;
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .prediction-card__window {
@@ -570,6 +791,54 @@ body {
   transition: width 0.3s;
 }
 
+.prediction-card__badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.prediction-card__badge--holiday {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+
+.prediction-card__badge--weekend {
+  background: rgba(241, 196, 15, 0.15);
+  color: #f1c40f;
+}
+
+.upcoming-holidays {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+}
+
+.upcoming-holidays h4 {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.holiday-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.holiday-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(231, 76, 60, 0.1);
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.2);
+}
+
 /* ── Settings ───────────────────────────────────────────────────── */
 
 .setting {
@@ -582,6 +851,22 @@ body {
 
 .setting input[type="checkbox"] {
   accent-color: var(--accent);
+}
+
+.setting select {
+  margin-left: auto;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.setting select:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 
 .setting-group {
