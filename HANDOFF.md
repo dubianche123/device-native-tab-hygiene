@@ -171,11 +171,13 @@ Important IPC detail: `extension/js/idle-detector.js` builds `holidayLevels` for
 
 Toggle in popup header (`🚀 Deploy` / `🧪 Test`).
 
-- **Deploy mode** (default): `performStaleCheck()` and `aiCleanup()` call `chrome.tabs.remove()`.
-- **Test mode**: Same logic, but calls `tagTab(tabId)` instead — tabs get red `🏷 TEST` badge in popup. Tagged tab IDs stored in `chrome.storage.local` under `nj:taggedTabs`.
+- **Deploy mode**: `performStaleCheck()` and `aiCleanup()` call `chrome.tabs.remove()`.
+- **Test mode** (fresh-install default): Same logic, but calls `tagTab(tabId)` instead — tabs get red `🏷 TEST` badge in popup. Tagged tab IDs stored in `chrome.storage.local` under `nj:taggedTabs`.
 - Tags cleared at start of each scan (`clearAllTags()`), so each run shows fresh results.
 
-Setting: `testMode` (boolean, default `false`).
+Setting: `testMode` (boolean, default `true` on fresh installs; existing installs keep their saved value).
+
+**Deploy readiness suggestion**: The popup's AI Suggestions panel now tells the user when Deploy is reasonable. Current heuristic: keep Test until there are at least 5 manual close samples and at least 2 categories with learned close-time recommendations; 10 manual closes and 3 learned categories is the safer bar.
 
 ## Closed Log Restore
 

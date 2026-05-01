@@ -1541,9 +1541,9 @@ async function updateAISuggestions() {
   container.innerHTML = data.suggestions.map(s => {
     const cls = levelClass[s.level] || 'ai-suggestion--info';
     const btn = s.action
-      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : '🔍 Check'}</button>`
+      ? `<button class="btn btn--xs ai-suggestion__action" data-action="${escapeHTML(s.action)}">${s.action === 'aiCleanup' ? '🧹 Clean' : s.action === 'forceCheck' ? '🔍 Check' : s.action === 'setModeDeploy' ? '🚀 Deploy' : s.action === 'setModeTest' ? '🧪 Test' : 'Open'}</button>`
       : '';
-    const ignore = s.level !== 'ok'
+    const ignore = s.level !== 'ok' || s.action
       ? '<button class="btn btn--xs ai-suggestion__ignore" title="Hide AI Suggestions for 10 minutes">Ignore</button>'
       : '';
     return `<div class="ai-suggestion ${cls}"><span>${s.icon}</span><span class="ai-suggestion__text">${escapeHTML(s.text)}</span>${btn}${ignore}</div>`;
@@ -1558,6 +1558,10 @@ async function updateAISuggestions() {
         document.getElementById('btn-ai-cleanup')?.click();
       } else if (action === 'forceCheck') {
         document.getElementById('btn-force-check')?.click();
+      } else if (action === 'setModeDeploy') {
+        await setMode(false);
+      } else if (action === 'setModeTest') {
+        await setMode(true);
       }
       setTimeout(() => updateAISuggestions(), 2000);
     });

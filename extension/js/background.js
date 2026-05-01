@@ -47,6 +47,10 @@ const IMPORTANCE_MULTIPLIER_MAX = 1.75;
 const MIN_EFFECTIVE_THRESHOLD_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HIGH_IDLE_CONFIDENCE = 0.92;
+const DEPLOY_MIN_MANUAL_CLOSES = 5;
+const DEPLOY_SAFE_MANUAL_CLOSES = 10;
+const DEPLOY_MIN_LEARNED_CATEGORIES = 2;
+const DEPLOY_SAFE_LEARNED_CATEGORIES = 3;
 
 function isTrackableUrl(url) {
   return Boolean(url)
@@ -274,6 +278,22 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
     thresholdSource,
     stale,
     reason,
+  };
+}
+
+function deployReadiness(summary = {}) {
+  const manualCount = Number(summary.manualCount || 0);
+  const learnedCategoryCount = Number(summary.categoriesWithRecommendations || 0);
+  const trackedCategoryCount = Number(summary.categoriesTracked || 0);
+  const ready = manualCount >= DEPLOY_MIN_MANUAL_CLOSES && learnedCategoryCount >= DEPLOY_MIN_LEARNED_CATEGORIES;
+  const safer = manualCount >= DEPLOY_SAFE_MANUAL_CLOSES
+    && learnedCategoryCount >= Math.min(DEPLOY_SAFE_LEARNED_CATEGORIES, Math.max(1, trackedCategoryCount));
+  return {
+    manualCount,
+    learnedCategoryCount,
+    trackedCategoryCount,
+    ready,
+    safer,
   };
 }
 
@@ -1169,6 +1189,8 @@ async function getAISuggestion() {
   const forceThreshold = settings.aiForceCleanupThreshold || 85;
   const now = Date.now();
   const mutedUntil = Number(settings.aiSuggestionsMutedUntil || 0);
+  const closureLearning = await getLearningSummary();
+  const readiness = deployReadiness(closureLearning);
 
   if (mutedUntil > now) {
     return {
@@ -1180,10 +1202,35 @@ async function getAISuggestion() {
       targetMem,
       targetTabs,
       forceThreshold,
+      deployReadiness: readiness,
     };
   }
 
   const suggestions = [];
+
+  if (settings.testMode) {
+    if (!readiness.ready) {
+      suggestions.push({
+        level: 'warning',
+        icon: '🧪',
+        text: `Stay in Test for now. You have ${readiness.manualCount} manual closes and ${readiness.learnedCategoryCount}/${readiness.trackedCategoryCount || 0} learned categories. Try Deploy after ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned categories; ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is safer.`,
+      });
+    } else {
+      suggestions.push({
+        level: 'ok',
+        icon: '🚀',
+        text: `Deploy looks ready. You have ${readiness.manualCount} manual closes and ${readiness.learnedCategoryCount}/${readiness.trackedCategoryCount || 0} learned categories. ${DEPLOY_SAFE_MANUAL_CLOSES}/${DEPLOY_SAFE_LEARNED_CATEGORIES} is the safer bar.`,
+        action: 'setModeDeploy',
+      });
+    }
+  } else if (!readiness.ready) {
+    suggestions.push({
+      level: 'warning',
+      icon: '🧯',
+      text: `Deploy is active before the model is ready. Consider switching back to Test until you reach ${DEPLOY_MIN_MANUAL_CLOSES} manual closes and ${DEPLOY_MIN_LEARNED_CATEGORIES} learned categories.`,
+      action: 'setModeTest',
+    });
+  }
 
   // Tab count is the most reliable cleanup target; memory pressure may lag
   // behind tab closure because Chromium and macOS reclaim memory lazily.

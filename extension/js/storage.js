@@ -280,7 +280,7 @@ const DEFAULT_SETTINGS = {
   blacklist: [],      // [{ pattern: string, hours: number, minutes: number }]
   holidayCalendar: 'none',
   idleSchedule: DEFAULT_IDLE_SCHEDULE,
-  testMode: false,
+  testMode: true,
   aiSuggestionsMutedUntil: 0,
   aiCleanupTargetMemory: 70,
   aiCleanupTargetTabs: 30,
