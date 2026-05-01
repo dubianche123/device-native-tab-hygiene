@@ -7,18 +7,18 @@
 
 # Neural-Janitor: Edge-Accelerated Tab Hygiene
 
-## A local, NPU-powered browser automation engine
+## A local Core ML browser automation engine
 
 **Version**: 1.0 MVP  
 **Author**: Leo  
 **Date**: May 2026  
 
-Neural-Janitor is an intelligent browser tab management extension powered by Apple's local machine learning stack. To the user, it is a smart cleanup tool; to the engineer, it is a methodology for capturing browser telemetry, compressing it locally, and utilizing the Neural Engine (NPU) to predict user idle states without ever touching a cloud service.
+Neural-Janitor is an intelligent Chrome / Edge tab management extension powered by Apple's local machine learning stack. To the user, it is a smart cleanup tool; to the engineer, it is a methodology for capturing browser telemetry, compressing it locally, and using Core ML to predict user idle states without ever touching a cloud service.
 
 Its architectural principle is simple:
 **Tab management should learn from the user, but that learning must happen entirely on-device with near-zero power consumption.**
 
-Underneath the browser extension, the system records lightweight behavioral signals. The macOS Swift companion app translates these into training data, and Core ML runs continuous predictions on the Apple Neural Engine to identify the optimal moments for workspace hygiene.
+Underneath the browser extension, the system records lightweight behavioral signals. The macOS Swift companion app translates these into training data, and Core ML runs local predictions through Apple's runtime scheduler to identify the optimal moments for workspace hygiene.
 
 ## Runtime Dataflow
 
@@ -43,7 +43,7 @@ Underneath the browser extension, the system records lightweight behavioral sign
 │                                                         │
 │  ┌──────────────────────┐  ┌─────────────────────────┐ │
 │  │ Activity Collector   │→ │ Core ML Predictor       │ │
-│  │ (timestamps, state)  │  │ (runs on ANE / NPU)     │ │
+│  │ (idle + tab signals) │  │ (Core ML Auto)          │ │
 │  └──────────────────────┘  └─────────────────────────┘ │
 │                                    ↓                    │
 │                           Idle window predictions       │
@@ -65,12 +65,24 @@ Neural-Janitor uses a narrower but smarter model role. It builds a `MLBoostedTre
 |:--|:--|:--|
 | **When to close?** | Hardcoded static timer (e.g., 7 days). | Dynamic timer gated by Core ML idle prediction. |
 | **Categorization** | Simple URL domain matching. | On-device NLP via Apple `NaturalLanguage` framework. |
-| **Resource Cost** | Constant JavaScript polling in background. | Event-driven background worker + NPU-accelerated inference. |
+| **Resource Cost** | Constant JavaScript polling in background. | Event-driven background worker + local Core ML inference. |
 | **Privacy** | Often requires syncing data to the cloud. | 100% local. Zero telemetry leaves the device. |
+
+## Current Feature Set
+
+- **Test / Deploy modes**: Test mode learns your browsing pattern and tags tabs that would be closed. Deploy mode actually closes stale tabs and records them in the local closed-tab log.
+- **Category-aware retention**: AI tools, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and uncategorized pages each get their own default timeout. Every category threshold is adjustable in Settings with a slider and number input up to 30 days.
+- **AI Tools category**: ChatGPT, Claude, Gemini, DeepSeek, Hugging Face, Perplexity, Qwen, Kimi, Doubao, and similar tools are classified separately and default to a 30-day retention window.
+- **Holiday-aware idle predictions**: Settings can enable Japanese or Chinese holiday calendars. The ML Insights panel marks each predicted day as Workday, Weekend, or a named holiday / extended period such as Golden Week or National Day.
+- **AI Cleanup**: The popup can close or tag low-importance tabs until memory pressure and tab count targets are met. It protects high-priority categories such as AI tools and work tabs, honors the whitelist, and respects Test mode.
+- **Memory and CPU monitor**: The popup shows memory pressure, CPU usage, and a compact CPU model / thread label such as `M3 8T`.
+- **AI Suggestions**: The popup recommends actions such as reducing tab count or running AI Cleanup. Suggestions refresh when you run Check, run AI Clean, change modes, change the holiday calendar, save settings, and periodically while the popup is open.
+- **Transparent ML console**: The popup shows Native Messaging link state, real valid training samples, model accuracy when available, last local retrain time, hardware telemetry markers, decision confidence / heuristic estimates, and a low-power inference indicator.
+- **Closed-tab recovery**: Tabs closed by Neural-Janitor are logged by category and can be restored from the Closed Log.
 
 ## Category Timeout Rules
 
-Tabs are assigned an idle threshold based on their category. The companion app handles the categorization using local keyword heuristics and Natural Language tokenization.
+Tabs are assigned an idle threshold based on their category. The browser uses a domain-first categorizer, and the companion app can help with local keyword heuristics and Natural Language tokenization. Thresholds are configurable in the popup Settings panel.
 
 | Category | Max Idle Time | Rationale |
 |----------|--------------|-----------|
@@ -100,18 +112,27 @@ Tracks `openedAt`, `lastVisited`, `dwellMs` (cumulative foreground time), and `i
 When the extension cannot confidently categorize a URL, it asks the companion app. The companion uses the Apple `NaturalLanguage` framework to tokenize the page title, description, and content, scoring them against a weighted taxonomy.
 
 ### 3. Core ML Predictor
-The companion builds a 9-feature `TrainingSample` from historical activity (day of week, time, dwell averages, tab count, weekend flags, etc.). It continuously trains a `MLBoostedTreeClassifier`. By compiling to Core ML, macOS automatically schedules the inference workload onto the Apple Neural Engine (ANE) on Apple Silicon, drawing negligible power (milliwatts).
+The companion builds a 9-feature `TrainingSample` from historical activity: day of week, hour, minute, weekend flag, minutes since last active, active events in the last 24 hours, active days in the last 7 days, tab count, and average dwell minutes. It trains a `MLBoostedTreeClassifier` and loads it through Core ML with `computeUnits = .all`.
+
+Core ML can use the Apple Neural Engine, GPU, or CPU depending on macOS scheduling and model support. Public APIs expose requested compute units and hardware availability, not the exact processor used for each individual inference, so the UI reports **NPU/GPU eligibility and CPU fallback state** rather than pretending to know the private scheduler's exact choice.
+
+### 4. Holiday-Aware Idle Windows
+The browser builds a per-day `holidayLevels` payload for the next seven calendar dates and sends it to the companion through Native Messaging. That means a Monday Japanese holiday changes Monday's prediction even if today is a normal workday. If the native host is offline, the browser fallback uses the same Japan / China calendar module and labels the result as a heuristic estimate.
+
+### 5. Memory Pressure Cleanup
+AI Cleanup ranks tabs by category priority, interaction count, and idle age. Lower-value, low-interaction, long-idle tabs are cleaned first. NSFW tabs are always the most aggressive cleanup target; AI and work tabs are protected by high category priority. In Test mode, the same logic tags tabs instead of closing them.
 
 ## Security And Privacy
 
-- **No Cloud Analytics**: All activity logs, ML models, and tab registries stay entirely on `~/Library/Application Support/Mimo/` and the extension's local storage.
+- **No Cloud Analytics**: All activity logs, ML models, and tab registries stay entirely on `~/Library/Application Support/Neural-Janitor/` and the extension's local storage.
 - **Zero Tracker Injections**: Does not inject remote scripts or tracking pixels.
 - **Local Model Only**: The Core ML model is trained exclusively on your machine, using your data.
+- **Native Messaging Boundary**: Browser JS and Swift communicate through Chrome / Edge Native Messaging using local length-prefixed JSON over stdio.
 
 ## Transferable Pattern
 
 The useful pattern is not just tab closing. It is:
-**browser telemetry + local Swift companion + NPU-accelerated ML inference**
+**browser telemetry + local Swift companion + Core ML local inference**
 
 This can transfer to:
 - **Local Ad Blockers**: Train a model on your browsing habits to pre-emptively block dynamic tracking patterns.
@@ -120,21 +141,65 @@ This can transfer to:
 
 ## Setup Instructions
 
-### 1. Build the Companion
+Native Messaging requires a native host manifest on macOS. Chrome / Edge extensions cannot install that host silently, so a one-time install script is still required unless you package the companion as a signed installer.
+
+### 1. Clone or Open the Repository
+
 ```bash
-cd Mimo
-chmod +x scripts/install.sh
-./scripts/install.sh
+cd Neural-Janitor
 ```
 
 ### 2. Load the Extension
-Load the `Mimo/extension` folder as an unpacked extension in Chrome/Edge. Copy the Extension ID.
+Open `chrome://extensions` or `edge://extensions`, enable Developer Mode, choose **Load unpacked**, and select:
 
-### 3. Link Extension
+```text
+extension/
+```
+
+Copy the Extension ID shown by the browser.
+
+### 3. Build and Link the Companion
+```bash
+chmod +x scripts/install.sh
+./scripts/install.sh YOUR_EXTENSION_ID
+```
+
+Then reload the extension from the browser extensions page. The companion starts automatically when the extension opens a Native Messaging connection.
+
+### 4. After Companion Changes
+Whenever the Swift companion or Native Messaging host id changes, rerun:
+
 ```bash
 ./scripts/install.sh YOUR_EXTENSION_ID
 ```
-Restart your browser. The companion will automatically start.
+
+Then reload the browser extension.
+
+## Using The Popup
+
+- **Check**: Runs a stale-tab check immediately. In Test mode it tags tabs; in Deploy mode it closes eligible tabs.
+- **AI Clean**: Uses memory pressure, tab count targets, category priority, interaction count, idle age, and whitelist settings to decide what to clean.
+- **MEM / CPU**: Shows current memory pressure, CPU usage, and compact CPU model / thread count.
+- **AI Suggestions**: Shows current recommendations and action buttons.
+- **ML Insights**: Shows idle windows for the next seven days, including holiday / weekend / workday labels.
+- **Settings**: Controls companion usage, holiday calendar, per-category thresholds, whitelist, target memory pressure, target tab count, and forced AI Cleanup threshold.
+
+## Development Checks
+
+```bash
+node --check extension/js/background.js
+node --check extension/js/content.js
+node --check extension/js/constants.js
+node --check extension/js/categorizer.js
+node --check extension/js/holidays.js
+node --check extension/js/idle-detector.js
+node --check extension/js/popup.js
+node --check extension/js/storage.js
+python3 -B -m py_compile scripts/train_model.py
+bash -n scripts/install.sh
+bash -n scripts/uninstall.sh
+swift build -c release --package-path companion/NeuralJanitorCompanion
+```
 
 ## Conclusion
 
