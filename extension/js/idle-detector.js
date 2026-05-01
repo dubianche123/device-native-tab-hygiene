@@ -1,5 +1,5 @@
 /**
- * Smart Tab Hygiene — Idle Prediction Client
+ * Neural-Janitor — Idle Prediction Client
  *
  * Communicates with the macOS companion app via Native Messaging to:
  *   1. Record user activity timestamps (for ML training data)
@@ -10,7 +10,13 @@
  * heuristic: assume the user is idle between 01:00–07:00 every day.
  */
 
-import { NATIVE_HOST_NAME, STORAGE_KEYS } from './constants.js';
+import {
+  APP_NAME,
+  ENGINE_CODENAME,
+  HARDWARE_MARKER_STATES,
+  IPC_PROTOCOL_VERSION,
+  NATIVE_HOST_NAME,
+} from './constants.js';
 import { getIdlePredictions, setIdlePredictions, getCompanionStatus, setCompanionStatus } from './storage.js';
 
 let nativePort = null;
@@ -23,17 +29,34 @@ export function connectToCompanion() {
     nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
     nativePort.onMessage.addListener(handleCompanionMessage);
     nativePort.onDisconnect.addListener(() => {
-      console.warn('[Smart Tab Hygiene] Companion disconnected:', chrome.runtime.lastError?.message);
+      const error = chrome.runtime.lastError?.message || 'Native Messaging port disconnected';
+      console.warn('[Neural-Janitor] Companion disconnected:', error);
       nativePort = null;
-      setCompanionStatus(disconnectedStatus(chrome.runtime.lastError?.message));
+      setCompanionStatus(disconnectedStatus(error));
     });
-    setCompanionStatus({ connected: true, lastSync: Date.now() });
-    console.log('[Smart Tab Hygiene] Connected to companion app');
+    setCompanionStatus({
+      connected: true,
+      lastSync: Date.now(),
+      protocolVersion: IPC_PROTOCOL_VERSION,
+      appName: APP_NAME,
+      engineCodename: ENGINE_CODENAME,
+      telemetryStatus: 'connecting',
+    });
+    console.log('[Neural-Janitor] Connected to companion app');
   } catch (err) {
-    console.warn('[Smart Tab Hygiene] Could not connect to companion:', err.message);
+    console.warn('[Neural-Janitor] Could not connect to companion:', err.message);
     nativePort = null;
-    setCompanionStatus({ connected: false, lastSync: Date.now(), error: err.message });
+    setCompanionStatus(disconnectedStatus(err.message));
   }
+}
+
+function withIPCMetadata(message) {
+  return {
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    appName: APP_NAME,
+    engineCodename: ENGINE_CODENAME,
+    ...message,
+  };
 }
 
 function sendToCompanion(message) {
@@ -54,7 +77,7 @@ function sendToCompanion(message) {
     }, 10_000);
     nativePort.onMessage.addListener(handler);
     try {
-      nativePort.postMessage(message);
+      nativePort.postMessage(withIPCMetadata(message));
     } catch (err) {
       clearTimeout(timeout);
       nativePort.onMessage.removeListener(handler);
@@ -71,12 +94,58 @@ function handleCompanionMessage(msg) {
   if (msg.type === 'idlePredictions') {
     setIdlePredictions(msg.predictions);
     if (msg.health) {
-      setCompanionStatus({ connected: true, lastSync: Date.now(), ...msg.health });
+      setCompanionStatus(normalizeHealthStatus({ connected: true, lastSync: Date.now(), ...msg.health }));
     }
-    console.log('[Smart Tab Hygiene] Updated idle predictions from ML model:', msg.predictions);
+    console.log('[Neural-Janitor] Updated idle predictions from ML model:', msg.predictions);
   } else if (msg.type === 'health') {
-    setCompanionStatus({ connected: true, lastSync: Date.now(), ...msg });
+    setCompanionStatus(normalizeHealthStatus({ connected: true, lastSync: Date.now(), ...msg }));
   }
+}
+
+function normalizeHealthStatus(status = {}) {
+  const connected = status.connected !== false;
+  const devices = status.hardwareTelemetry?.devices || status.devices || [
+    {
+      key: 'npu',
+      label: 'NPU',
+      detail: connected ? 'Apple Neural Engine' : 'Apple Neural Engine telemetry unavailable',
+      available: null,
+      state: connected ? HARDWARE_MARKER_STATES.STANDBY : HARDWARE_MARKER_STATES.ERROR,
+    },
+    {
+      key: 'gpu',
+      label: 'GPU',
+      detail: connected ? 'Metal GPU' : 'Metal GPU telemetry unavailable',
+      available: null,
+      state: connected ? HARDWARE_MARKER_STATES.STANDBY : HARDWARE_MARKER_STATES.ERROR,
+    },
+    {
+      key: 'cpu',
+      label: 'CPU',
+      detail: connected ? 'CPU fallback ready' : 'Browser heuristic fallback',
+      available: true,
+      state: status.runtime === 'coreml' ? HARDWARE_MARKER_STATES.STANDBY : HARDWARE_MARKER_STATES.ACTIVE,
+    },
+  ];
+  const markerStates = Object.fromEntries(
+    devices.map(device => [device.key, device.state || HARDWARE_MARKER_STATES.STANDBY])
+  );
+
+  return {
+    protocolVersion: status.protocolVersion || 1,
+    appName: status.appName || APP_NAME,
+    engineCodename: status.engineCodename || ENGINE_CODENAME,
+    telemetryStatus: status.telemetryStatus || status.hardwareTelemetry?.status || (connected ? 'online' : 'offline'),
+    ...status,
+    devices,
+    hardwareTelemetry: {
+      source: connected ? 'companion' : 'browser-fallback',
+      status: connected ? 'online' : 'offline',
+      ...status.hardwareTelemetry,
+      markerStates: status.hardwareTelemetry?.markerStates || markerStates,
+      devices,
+    },
+  };
 }
 
 // ── Public API ────────────────────────────────────────────────────────
@@ -112,18 +181,19 @@ export async function requestPredictions() {
     if (response?.predictions) {
       await setIdlePredictions(response.predictions);
       if (response.modelMode) {
-        await setCompanionStatus({
+        await setCompanionStatus(normalizeHealthStatus({
           connected: true,
           lastSync: Date.now(),
           modelVersion: response.modelMode,
           activityCount: response.activityCount || 0,
           ...(response.health || {}),
-        });
+        }));
       }
       return response.predictions;
     }
-  } catch {
-    // Fall through to heuristic
+  } catch (err) {
+    const status = disconnectedStatus(err.message);
+    await setCompanionStatus(status);
   }
   return getFallbackPredictions();
 }
@@ -142,8 +212,9 @@ export async function requestCompanionHealth() {
         modelVersion: response.modelMode || response.runtime || 'unknown',
         ...response,
       };
-      await setCompanionStatus(status);
-      return status;
+      const normalized = normalizeHealthStatus(status);
+      await setCompanionStatus(normalized);
+      return normalized;
     }
   } catch (err) {
     const status = disconnectedStatus(err.message);
@@ -202,10 +273,54 @@ function getFallbackPredictions() {
   return predictions;
 }
 
+function diagnoseNativeDisconnect(error = null) {
+  const text = String(error || '').toLowerCase();
+  if (text.includes('not found') || text.includes('specified native messaging host')) {
+    return 'host_missing';
+  }
+  if (text.includes('forbidden') || text.includes('permission') || text.includes('access')) {
+    return 'host_forbidden';
+  }
+  if (text.includes('timeout')) {
+    return 'ipc_timeout';
+  }
+  if (text.includes('exited') || text.includes('closed') || text.includes('disconnected')) {
+    return 'host_exited';
+  }
+  return error ? 'native_link_error' : 'native_link_offline';
+}
+
 function disconnectedStatus(error = null) {
+  const disconnectReason = diagnoseNativeDisconnect(error);
+  const devices = [
+    {
+      key: 'npu',
+      label: 'NPU',
+      detail: 'Apple Neural Engine telemetry unavailable',
+      available: null,
+      state: HARDWARE_MARKER_STATES.ERROR,
+    },
+    {
+      key: 'gpu',
+      label: 'GPU',
+      detail: 'Metal GPU telemetry unavailable',
+      available: null,
+      state: HARDWARE_MARKER_STATES.ERROR,
+    },
+    {
+      key: 'cpu',
+      label: 'CPU',
+      detail: 'Browser heuristic fallback',
+      available: true,
+      state: HARDWARE_MARKER_STATES.ACTIVE,
+    },
+  ];
   return {
     connected: false,
     ok: false,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    appName: APP_NAME,
+    engineCodename: ENGINE_CODENAME,
     lastSync: Date.now(),
     modelMode: 'fallback',
     modelLoaded: false,
@@ -217,18 +332,28 @@ function disconnectedStatus(error = null) {
     minimumTrainingSamples: 100,
     modelMaturity: 0,
     modelAccuracy: null,
-    readinessReason: 'Companion disconnected; using browser CPU heuristic',
+    readinessReason: 'Native link offline; NPU telemetry unavailable, using browser CPU heuristic',
     currentIdleConfidence: fallbackConfidenceNow(),
     confidenceCurve: fallbackConfidenceCurve(),
     decisionThreshold: 0.55,
     powerMode: 'low',
     powerSignal: 'standby',
+    telemetryStatus: 'offline',
+    npuDisconnected: true,
+    disconnectReason,
     error,
-    devices: [
-      { key: 'npu', label: 'NPU', detail: 'Apple Neural Engine', available: false, state: 'unavailable' },
-      { key: 'gpu', label: 'GPU', detail: 'Metal GPU', available: false, state: 'unavailable' },
-      { key: 'cpu', label: 'CPU', detail: 'Browser heuristic', available: true, state: 'active' },
-    ],
+    devices,
+    hardwareTelemetry: {
+      source: 'browser-fallback',
+      status: 'offline',
+      reason: disconnectReason,
+      markerStates: {
+        npu: HARDWARE_MARKER_STATES.ERROR,
+        gpu: HARDWARE_MARKER_STATES.ERROR,
+        cpu: HARDWARE_MARKER_STATES.ACTIVE,
+      },
+      devices,
+    },
   };
 }
 

@@ -1,12 +1,14 @@
-# Smart Tab Hygiene
+# Neural-Janitor
 
-A Chrome/Edge extension that **learns when you're away from your Mac** using Apple's Core ML on the Neural Engine (NPU), and automatically closes stale browser tabs after category-specific idle thresholds.
+Neural-Janitor (神经门卫) is a Chrome/Edge extension that **learns when you're away from your Mac** using Apple's Core ML on the Neural Engine (NPU), and automatically closes stale browser tabs after category-specific idle thresholds.
+
+Kernel codename: **The Chronos Engine**.
 
 中文说明见 [README.zh-CN.md](README.zh-CN.md).
 
 ## Why?
 
-You leave 47 tabs open. Three days later, your MacBook sounds like a jet engine. Smart Tab Hygiene watches your patterns, knows when you're sleeping or away, and quietly closes tabs you haven't touched — categorising and recording them so nothing is lost.
+You leave 47 tabs open. Three days later, your MacBook sounds like a jet engine. Neural-Janitor watches your patterns, knows when you're sleeping or away, and quietly closes tabs you haven't touched — categorising and recording them so nothing is lost.
 
 ## How It Works
 
@@ -30,7 +32,7 @@ You leave 47 tabs open. Three days later, your MacBook sounds like a jet engine.
 │  macOS Companion App (Swift)                            │
 │                                                         │
 │  ┌──────────────────────┐  ┌─────────────────────────┐ │
-│  │ Activity Collector   │→ │ Core ML Idle Predictor  │ │
+│  │ Activity Collector   │→ │ The Chronos Engine      │ │
 │  │ (idle + tab context) │  │ (runs on ANE / NPU)     │ │
 │  └──────────────────────┘  └─────────────────────────┘ │
 │                                    ↓                    │
@@ -57,14 +59,14 @@ You leave 47 tabs open. Three days later, your MacBook sounds like a jet engine.
 
 All thresholds are customisable in the extension popup settings. The popup also lets you close a tracked tab directly; those manual closes are written to the same Closed Log as automatic cleanups.
 
-The popup status area also shows the local ML runtime. `Link: Connected` confirms Native Messaging, the training progress shows local sample maturity and measured training accuracy when available, and the decision panel shows the current idle confidence plus a short confidence curve. `ML` means the native companion is responding; `CPU` means lookup/heuristic fallback; `NPU`, `GPU`, and `CPU` chips show whether those local devices are available to Core ML Auto or whether CPU fallback is currently active. The green Low Power light is a visualisation based on recent local inference activity, not a direct wattage reading.
+The popup status area also shows the local ML runtime. `Link: Connected` confirms Native Messaging, the training progress shows local sample maturity and measured training accuracy when available, and the decision panel shows the current idle confidence plus a short confidence curve. `ML` means the native companion is responding; `CPU` means lookup/heuristic fallback; `NPU`, `GPU`, and `CPU` chips use one shared telemetry marker set across the popup: `AUTO`, `ACTIVE`, `STANDBY`, `UNAVAILABLE`, and `ERROR`. If Native Messaging drops, NPU/GPU markers intentionally move to `ERROR` and CPU becomes the browser heuristic fallback. The green Low Power light is a visualisation based on recent local inference activity, not a direct wattage reading.
 
 ## Quick Start
 
 ### Prerequisites
 
 - macOS 13+ (Ventura or later)
-- Xcode Command Line Tools (`xcode-select --install`) to build locally, or a prebuilt `SmartTabHygieneCompanion` binary
+- Xcode Command Line Tools (`xcode-select --install`) to build locally, or a prebuilt `NeuralJanitorCompanion` binary
 - Chrome 88+ or Edge 88+
 
 ### 1. Load the Extension
@@ -72,26 +74,26 @@ The popup status area also shows the local ML runtime. `Link: Connected` confirm
 1. Open `chrome://extensions` (or `edge://extensions`)
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked**
-4. Select the `Smart-Tab-Hygiene/extension` directory
+4. Select the `Neural-Janitor/extension` directory
 5. Copy the extension ID shown on the card
 
 ### 2. Build & Install the Companion
 
 ```bash
-cd Smart-Tab-Hygiene
+cd Neural-Janitor
 chmod +x scripts/install.sh
 ./scripts/install.sh <extension-id>
 ```
 
 This will:
 - Build the Swift companion app in release mode
-- Install it to `~/.local/bin/SmartTabHygieneCompanion`
+- Install it to `~/.local/bin/NeuralJanitorCompanion`
 - Register it as a Native Messaging host for Chrome & Edge
 
 If you already have a prebuilt companion binary, you can skip the local Swift build:
 
 ```bash
-SMART_TAB_HYGIENE_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion ./scripts/install.sh YOUR_EXTENSION_ID
+NEURAL_JANITOR_COMPANION_BINARY=/path/to/NeuralJanitorCompanion ./scripts/install.sh YOUR_EXTENSION_ID
 ```
 
 ### 3. Restart the Browser
@@ -111,10 +113,10 @@ Or edit the Native Messaging manifest:
 
 ```bash
 # Chrome
-vim ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.smarttabhygiene.companion.json
+vim ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.neuraljanitor.companion.json
 
 # Edge
-vim ~/Library/Application\ Support/Microsoft\ Edge/NativeMessagingHosts/com.smarttabhygiene.companion.json
+vim ~/Library/Application\ Support/Microsoft\ Edge/NativeMessagingHosts/com.neuraljanitor.companion.json
 ```
 
 Replace `REPLACE_WITH_EXTENSION_ID` with your actual extension ID. Chrome and Edge both use the `chrome-extension://<id>/` origin format for Native Messaging.
@@ -135,19 +137,19 @@ This generates synthetic activity events and a fallback idle lookup based on typ
 
 ## Sharing / Distribution Notes
 
-The browser extension can be loaded directly from `Smart-Tab-Hygiene/extension` or packaged for the Chrome Web Store / Edge Add-ons store. The Apple ML companion is different: Chrome and Edge do not allow an extension package to install a Native Messaging host by itself. That native host must be installed separately by the user, by a signed macOS app, or by an installer package.
+The browser extension can be loaded directly from `Neural-Janitor/extension` or packaged for the Chrome Web Store / Edge Add-ons store. The Apple ML companion is different: Chrome and Edge do not allow an extension package to install a Native Messaging host by itself. That native host must be installed separately by the user, by a signed macOS app, or by an installer package.
 
 Practical distribution options:
 
 - Extension-only mode: easiest for friends; uses browser idle signals and fallback predictions, but not Apple Core ML.
 - Extension + install script: current developer-friendly path.
 - Extension + signed macOS companion app/pkg: best polished path for public sharing.
-- Prebuilt companion binary: avoids requiring friends to install Xcode/Swift, using `SMART_TAB_HYGIENE_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion ./scripts/install.sh EXTENSION_ID`.
+- Prebuilt companion binary: avoids requiring friends to install Xcode/Swift, using `NEURAL_JANITOR_COMPANION_BINARY=/path/to/NeuralJanitorCompanion ./scripts/install.sh EXTENSION_ID`.
 
 ## Project Structure
 
 ```
-Smart-Tab-Hygiene/
+Neural-Janitor/
 ├── extension/                    # Chrome/Edge extension
 │   ├── manifest.json            # Manifest V3
 │   ├── popup.html               # Extension popup UI
@@ -162,7 +164,7 @@ Smart-Tab-Hygiene/
 │   │   └── popup.js             # Popup UI controller
 │   └── icons/                   # Extension icons
 ├── companion/
-│   └── SmartTabHygieneCompanion/
+│   └── NeuralJanitorCompanion/
 │       ├── Package.swift        # Swift Package Manager
 │       ├── Sources/main.swift   # Native Messaging host + Core ML
 │       └── Info.plist
@@ -188,7 +190,7 @@ The model is a boosted-tree tabular classifier:
 - **Training**: Create ML boosted-tree classifier on browser activity + Chrome idle/locked events
 - **Retraining**: automatic, daily, from accumulated activity data
 
-If there is not enough training data yet, Smart Tab Hygiene uses a local lookup/fallback schedule until 100+ activity samples are available. On Apple Silicon, Core ML can use the ANE for low-power inference when the trained model is loaded.
+If there is not enough training data yet, Neural-Janitor uses a local lookup/fallback schedule until 100+ activity samples are available. On Apple Silicon, Core ML can use the ANE for low-power inference when the trained model is loaded.
 
 ## Data Storage
 
@@ -196,15 +198,15 @@ All data stays on your Mac:
 
 | Data | Location |
 |------|----------|
-| Browser activity events | `~/Library/Application Support/Smart Tab Hygiene/activity_events.json` |
-| ML model + lookup fallback | `~/Library/Application Support/Smart Tab Hygiene/TabIdlePredictor.mlmodel`, `~/Library/Application Support/Smart Tab Hygiene/idle_lookup.json` |
-| Companion logs | `~/Library/Application Support/Smart Tab Hygiene/companion.log` |
+| Browser activity events | `~/Library/Application Support/Neural-Janitor/activity_events.json` |
+| ML model + lookup fallback | `~/Library/Application Support/Neural-Janitor/TabIdlePredictor.mlmodel`, `~/Library/Application Support/Neural-Janitor/idle_lookup.json` |
+| Companion logs | `~/Library/Application Support/Neural-Janitor/companion.log` |
 | Closed tab records | Chrome extension storage (`chrome.storage.local`) |
 | Tracked tab registry + dwell time | Chrome extension storage (`chrome.storage.local`) |
 
 ## Dwell-Time Tracking
 
-Smart Tab Hygiene records foreground tab sessions whenever a tab becomes active, the window gains/loses focus, the browser becomes idle/locked, or the user interacts with the page. Each tracked tab keeps:
+Neural-Janitor records foreground tab sessions whenever a tab becomes active, the window gains/loses focus, the browser becomes idle/locked, or the user interacts with the page. Each tracked tab keeps:
 
 - `openedAt`
 - `lastVisited`
@@ -243,7 +245,7 @@ chmod +x scripts/uninstall.sh
 ./scripts/uninstall.sh
 ```
 
-Then remove the extension from Chrome/Edge and delete the `Smart-Tab-Hygiene/` directory.
+Then remove the extension from Chrome/Edge and delete the `Neural-Janitor/` directory.
 
 ## License
 

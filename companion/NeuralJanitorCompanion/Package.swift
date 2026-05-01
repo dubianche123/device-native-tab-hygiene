@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "SmartTabHygieneCompanion",
+    name: "NeuralJanitorCompanion",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "SmartTabHygieneCompanion",
+            name: "NeuralJanitorCompanion",
             path: "Sources",
             linkerSettings: [
                 .linkedFramework("CreateML"),

@@ -1,5 +1,5 @@
 /**
- * Smart Tab Hygiene — Popup Controller
+ * Neural-Janitor — Popup Controller
  *
  * Renders three panels:
  *   1. Active Tabs  — currently tracked tabs with category badges & age
@@ -8,7 +8,7 @@
  * Plus a settings overlay.
  */
 
-import { CATEGORIES, DEFAULT_CATEGORY } from './constants.js';
+import { APP_NAME, CATEGORIES, DEFAULT_CATEGORY, HARDWARE_MARKER_STATES } from './constants.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -93,20 +93,39 @@ function shortRuntimeLabel(status = {}) {
 }
 
 function deviceClass(device = {}) {
-  const state = device.state || 'standby';
-  if (['auto', 'active', 'standby', 'unavailable', 'error'].includes(state)) {
+  const state = device.state || HARDWARE_MARKER_STATES.STANDBY;
+  if (Object.values(HARDWARE_MARKER_STATES).includes(state)) {
     return `ml-device--${state}`;
   }
   return 'ml-device--standby';
 }
 
+function telemetryDevices(status = {}) {
+  return status.hardwareTelemetry?.devices || status.devices || [
+    {
+      key: 'npu',
+      label: 'NPU',
+      state: HARDWARE_MARKER_STATES.ERROR,
+      detail: 'Apple Neural Engine telemetry unavailable',
+    },
+    {
+      key: 'gpu',
+      label: 'GPU',
+      state: HARDWARE_MARKER_STATES.ERROR,
+      detail: 'Metal GPU telemetry unavailable',
+    },
+    {
+      key: 'cpu',
+      label: 'CPU',
+      state: HARDWARE_MARKER_STATES.ACTIVE,
+      detail: 'Browser heuristic',
+    },
+  ];
+}
+
 function renderMLStatus(status = {}) {
   const el = document.getElementById('ml-status');
-  const devices = status.devices || [
-    { key: 'npu', label: 'NPU', state: 'unavailable', detail: 'Apple Neural Engine' },
-    { key: 'gpu', label: 'GPU', state: 'unavailable', detail: 'Metal GPU' },
-    { key: 'cpu', label: 'CPU', state: 'active', detail: 'Browser heuristic' },
-  ];
+  const devices = telemetryDevices(status);
 
   el.innerHTML = `
     <span class="ml-status__mode">${escapeHTML(shortRuntimeLabel(status))}</span>
@@ -118,17 +137,19 @@ function renderMLStatus(status = {}) {
   `;
 
   const runtime = status.runtimeLabel || (status.connected ? 'Local ML' : 'Heuristic fallback');
+  const engine = status.engineCodename ? `engine=${status.engineCodename}` : '';
   const compute = status.computeUnits ? `compute=${status.computeUnits}` : '';
+  const telemetry = status.telemetryStatus || status.hardwareTelemetry?.status || 'unknown';
   const deviceSummary = devices
     .map(device => `${device.label || device.key}: ${device.state || 'standby'}${device.available === false ? ' (unavailable)' : ''}`)
     .join(' | ');
-  el.title = [runtime, compute, deviceSummary, status.note]
+  el.title = [runtime, engine, compute, `telemetry=${telemetry}`, deviceSummary, status.note]
     .filter(Boolean)
     .join(' - ');
 }
 
 function acceleratorLabel(status = {}) {
-  const devices = status.devices || [];
+  const devices = telemetryDevices(status);
   const npu = devices.find(device => device.key === 'npu');
   if (status.runtime === 'coreml' && npu?.available) return 'NPU-eligible';
   if (status.runtime === 'coreml') return 'Core ML';
@@ -139,7 +160,7 @@ function acceleratorLabel(status = {}) {
 
 function retrainRuntimeLabel(status = {}) {
   const runtime = status.lastRetrainRuntime || status.runtimeLabel || 'local model';
-  const devices = status.devices || [];
+  const devices = telemetryDevices(status);
   const npu = devices.find(device => device.key === 'npu');
   if (runtime === 'Core ML Auto' && npu?.available) return 'Core ML Auto (NPU eligible)';
   return runtime;
@@ -147,7 +168,7 @@ function retrainRuntimeLabel(status = {}) {
 
 function computePathExplanation(status = {}) {
   const runtime = status.runtime || 'heuristic';
-  const devices = status.devices || [];
+  const devices = telemetryDevices(status);
   const npu = devices.find(device => device.key === 'npu');
   const gpu = devices.find(device => device.key === 'gpu');
   const cpu = devices.find(device => device.key === 'cpu');
@@ -167,7 +188,7 @@ function computePathExplanation(status = {}) {
     return 'Companion disabled in settings';
   }
   if (status.connected === false) {
-    return 'Browser CPU heuristic while native link is offline';
+    return `Browser CPU heuristic; NPU telemetry ${status.disconnectReason || 'offline'}`;
   }
   return `CPU heuristic (${status.activityCount || status.trainingSamples || 0}/${status.minimumTrainingSamples || 100} samples before Core ML)`;
 }
@@ -456,7 +477,7 @@ document.getElementById('btn-export').addEventListener('click', async () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `smart-tab-hygiene-closed-log-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `neural-janitor-closed-log-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 });
@@ -573,7 +594,7 @@ async function updateStatus() {
 
   if (!settings.enabled) {
     dot.className = 'status__dot';
-    text.textContent = 'Smart Tab Hygiene is disabled';
+    text.textContent = `${APP_NAME} is disabled`;
   } else {
     dot.className = 'status__dot status__dot--active';
     text.textContent = 'Monitoring active tabs';

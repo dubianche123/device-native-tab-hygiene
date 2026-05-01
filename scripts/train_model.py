@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Smart Tab Hygiene — Standalone Model Trainer
+Neural-Janitor — Standalone Model Trainer
+Kernel codename: The Chronos Engine
 
 Trains the idle-prediction model from scratch using historical data.
 Useful for bootstrapping the model before the companion app has
@@ -17,7 +18,7 @@ If no file is provided, the script generates synthetic training data
 based on common human sleep/work patterns.
 
 The bootstrap lookup table is saved to:
-    ~/Library/Application Support/Smart Tab Hygiene/idle_lookup.json
+    ~/Library/Application Support/Neural-Janitor/idle_lookup.json
 
 The Swift companion reads this as a fallback until it has enough real
 activity samples to train a Create ML model and load it through Core ML.
@@ -30,7 +31,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import random
 
-APP_SUPPORT = Path.home() / "Library" / "Application Support" / "Smart Tab Hygiene"
+APP_SUPPORT = Path.home() / "Library" / "Application Support" / "Neural-Janitor"
 
 # Categories matching extension/js/constants.js
 CATEGORIES = [

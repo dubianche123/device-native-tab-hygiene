@@ -1,5 +1,5 @@
 /**
- * Smart Tab Hygiene — URL Categoriser
+ * Neural-Janitor — URL Categoriser
  *
  * Fast, deterministic categorisation based on URL hostname/path matching.
  * Falls back to a simple heuristic if no keyword matches.

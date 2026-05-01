@@ -1,5 +1,5 @@
 /**
- * Smart Tab Hygiene — Constants & Category Definitions
+ * Neural-Janitor — Constants & Category Definitions
  *
  * Each category has:
  *   - keywords: URL substrings / hostname fragments used for fast matching
@@ -10,6 +10,18 @@
  * once and walked away from. AI tools get the longest default window because
  * long-running research/chat sessions are often intentionally kept around.
  */
+
+export const APP_NAME = 'Neural-Janitor';
+export const ENGINE_CODENAME = 'The Chronos Engine';
+export const IPC_PROTOCOL_VERSION = 2;
+
+export const HARDWARE_MARKER_STATES = Object.freeze({
+  AUTO: 'auto',             // Core ML Auto can use this device.
+  ACTIVE: 'active',         // Known active fallback path.
+  STANDBY: 'standby',       // Available/known, but not current path.
+  UNAVAILABLE: 'unavailable',
+  ERROR: 'error',           // Telemetry link is offline or inconsistent.
+});
 
 export const CATEGORIES = {
   nsfw: {
@@ -219,4 +231,4 @@ export const STORAGE_KEYS = {
 };
 
 // Native messaging host name (must match the one registered in the companion app)
-export const NATIVE_HOST_NAME = 'com.smarttabhygiene.companion';
+export const NATIVE_HOST_NAME = 'com.neuraljanitor.companion';

@@ -1,5 +1,5 @@
 /**
- * Smart Tab Hygiene - Local Storage Manager
+ * Neural-Janitor - Local Storage Manager
  *
  * Tab entries are stored under per-tab keys instead of one large registry
  * object. That keeps normal activity updates to a single small read/write.

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Smart Tab Hygiene",
+  "name": "Neural-Janitor",
   "version": "1.0.0",
-  "description": "Learns your idle patterns via Apple Core ML and automatically closes stale browser tabs by category.",
+  "description": "Neural-Janitor (神经门卫) uses The Chronos Engine to learn idle patterns via Apple Core ML and clean stale tabs by category.",
   "permissions": [
     "tabs",
     "storage",

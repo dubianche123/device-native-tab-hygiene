@@ -1,5 +1,5 @@
 /**
- * Smart Tab Hygiene — Background Service Worker (Manifest V3)
+ * Neural-Janitor — Background Service Worker (Manifest V3)
  *
  * Core lifecycle:
  *   1. On install / startup → snapshot all open tabs into the registry
@@ -10,9 +10,13 @@
  */
 
 import {
+  APP_NAME,
   CATEGORIES,
   CHECK_INTERVAL_MINUTES,
   COMPANION_SYNC_INTERVAL_MINUTES,
+  ENGINE_CODENAME,
+  HARDWARE_MARKER_STATES,
+  IPC_PROTOCOL_VERSION,
   SESSION_CHECKPOINT_INTERVAL_MINUTES,
 } from './constants.js';
 import {
@@ -240,7 +244,7 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
   try {
     await chrome.tabs.remove(numericTabId);
   } catch (err) {
-    console.warn('[Smart Tab Hygiene] Manual close failed:', err);
+    console.warn('[Neural-Janitor] Manual close failed:', err);
     return { ok: false, error: err?.message || 'Could not close tab' };
   }
 
@@ -269,7 +273,7 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
 // ══════════════════════════════════════════════════════════════════════
 
 chrome.runtime.onInstalled.addListener(async () => {
-  console.log('[Smart Tab Hygiene] Extension installed; initialising tab registry');
+  console.log('[Neural-Janitor] Extension installed; initialising tab registry');
   await snapshotAllTabs();
   setupAlarms();
   connectToCompanion();
@@ -278,7 +282,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  console.log('[Smart Tab Hygiene] Browser started; resuming');
+  console.log('[Neural-Janitor] Browser started; resuming');
   await snapshotAllTabs();
   setupAlarms();
   connectToCompanion();
@@ -291,19 +295,19 @@ chrome.runtime.onStartup.addListener(async () => {
 // ══════════════════════════════════════════════════════════════════════
 
 function setupAlarms() {
-  chrome.alarms.create('sth-stale-check', { periodInMinutes: CHECK_INTERVAL_MINUTES });
-  chrome.alarms.create('sth-companion-sync', { periodInMinutes: COMPANION_SYNC_INTERVAL_MINUTES });
-  chrome.alarms.create('sth-session-checkpoint', { periodInMinutes: SESSION_CHECKPOINT_INTERVAL_MINUTES });
+  chrome.alarms.create('nj-stale-check', { periodInMinutes: CHECK_INTERVAL_MINUTES });
+  chrome.alarms.create('nj-companion-sync', { periodInMinutes: COMPANION_SYNC_INTERVAL_MINUTES });
+  chrome.alarms.create('nj-session-checkpoint', { periodInMinutes: SESSION_CHECKPOINT_INTERVAL_MINUTES });
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === 'sth-stale-check') {
-    console.log('[Smart Tab Hygiene] Periodic stale-tab check triggered');
+  if (alarm.name === 'nj-stale-check') {
+    console.log('[Neural-Janitor] Periodic stale-tab check triggered');
     await performStaleCheck();
-  } else if (alarm.name === 'sth-companion-sync') {
+  } else if (alarm.name === 'nj-companion-sync') {
     const settings = await getSettings();
     if (settings.useCompanion !== false) await requestPredictions();
-  } else if (alarm.name === 'sth-session-checkpoint') {
+  } else if (alarm.name === 'nj-session-checkpoint') {
     await checkpointActiveSession();
   }
 });
@@ -407,7 +411,7 @@ chrome.idle.onStateChanged.addListener(async (newState) => {
     await closeActiveSession(`system_${newState}`);
     await recordBrowserActivity(newState);
     // User went idle — good time to run a check
-    console.log(`[Smart Tab Hygiene] System state -> ${newState}, running stale check`);
+    console.log(`[Neural-Janitor] System state -> ${newState}, running stale check`);
     await performStaleCheck();
   }
 });
@@ -499,7 +503,7 @@ async function performStaleCheck() {
   // If we closed anything, queue a return notification
   if (closedTabs.length > 0) {
     await setReturnNotification({ pending: true, closedTabs });
-    console.log(`[Smart Tab Hygiene] Closed ${closedTabs.length} stale tab(s). Return notification queued.`);
+    console.log(`[Neural-Janitor] Closed ${closedTabs.length} stale tab(s). Return notification queued.`);
   }
 
   return {
@@ -533,11 +537,11 @@ async function showReturnNotification(closedTabs) {
     .map(([cat, count]) => `• ${cat}: ${count}`)
     .join('\n');
 
-  const title = `Smart Tab Hygiene cleaned ${closedTabs.length} tab${closedTabs.length > 1 ? 's' : ''}`;
-  const message = `While you were away, Smart Tab Hygiene closed stale tabs:\n${summaryLines}\n\nOpen the popup to review.`;
+  const title = `Neural-Janitor cleaned ${closedTabs.length} tab${closedTabs.length > 1 ? 's' : ''}`;
+  const message = `While you were away, Neural-Janitor closed stale tabs:\n${summaryLines}\n\nOpen the popup to review.`;
 
   try {
-    chrome.notifications.create('sth-return', {
+    chrome.notifications.create('nj-return', {
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icons/icon128.png'),
       title,
@@ -546,12 +550,12 @@ async function showReturnNotification(closedTabs) {
       requireInteraction: true,
     });
   } catch (err) {
-    console.warn('[Smart Tab Hygiene] Notification error:', err);
+    console.warn('[Neural-Janitor] Notification error:', err);
   }
 }
 
 chrome.notifications.onClicked.addListener((notifId) => {
-  if (notifId === 'sth-return') {
+  if (notifId === 'nj-return') {
     // Open the popup programmatically isn't directly possible,
     // but we can focus the browser window
     chrome.notifications.clear(notifId);
@@ -590,7 +594,7 @@ async function snapshotAllTabs() {
   }
 
   await setTabRegistry(registry);
-  console.log(`[Smart Tab Hygiene] Snapshotted ${Object.keys(registry).length} tabs`);
+  console.log(`[Neural-Janitor] Snapshotted ${Object.keys(registry).length} tabs`);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -621,9 +625,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'requestCompanionHealth': {
         const settings = await getSettings();
         if (settings.useCompanion === false) {
+          const devices = [
+            { key: 'npu', label: 'NPU', detail: 'Apple Neural Engine', available: null, state: HARDWARE_MARKER_STATES.STANDBY },
+            { key: 'gpu', label: 'GPU', detail: 'Metal GPU', available: null, state: HARDWARE_MARKER_STATES.STANDBY },
+            { key: 'cpu', label: 'CPU', detail: 'Disabled', available: true, state: HARDWARE_MARKER_STATES.STANDBY },
+          ];
           sendResponse({
             connected: false,
             ok: false,
+            protocolVersion: IPC_PROTOCOL_VERSION,
+            appName: APP_NAME,
+            engineCodename: ENGINE_CODENAME,
             modelMode: 'disabled',
             modelLoaded: false,
             runtime: 'disabled',
@@ -640,11 +652,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             decisionThreshold: 0.55,
             powerMode: 'low',
             powerSignal: 'standby',
-            devices: [
-              { key: 'npu', label: 'NPU', detail: 'Apple Neural Engine', available: false, state: 'standby' },
-              { key: 'gpu', label: 'GPU', detail: 'Metal GPU', available: false, state: 'standby' },
-              { key: 'cpu', label: 'CPU', detail: 'Disabled', available: true, state: 'standby' },
-            ],
+            telemetryStatus: 'disabled',
+            devices,
+            hardwareTelemetry: {
+              source: 'settings',
+              status: 'disabled',
+              markerStates: {
+                npu: HARDWARE_MARKER_STATES.STANDBY,
+                gpu: HARDWARE_MARKER_STATES.STANDBY,
+                cpu: HARDWARE_MARKER_STATES.STANDBY,
+              },
+              devices,
+            },
           });
         } else {
           sendResponse(await requestCompanionHealth());

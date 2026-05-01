@@ -1,5 +1,6 @@
 /**
- * Smart Tab Hygiene Companion - Native Messaging Host
+ * Neural-Janitor Companion - Native Messaging Host
+ * Kernel codename: The Chronos Engine
  *
  * Bridges the Chrome/Edge extension to Apple's local ML stack. The extension
  * sends browser activity timestamps; this process trains a Create ML logistic
@@ -12,20 +13,29 @@ import CreateML
 import Metal
 import NaturalLanguage
 
+let appName = "Neural-Janitor"
+let engineCodename = "The Chronos Engine"
+let ipcProtocolVersion = 2
+
 // MARK: - Paths
 
 let appSupportDir: URL = {
     let dir: URL
     let environment = ProcessInfo.processInfo.environment
-    if let override = environment["SMART_TAB_HYGIENE_APP_SUPPORT_DIR"] ?? environment["MIMO_APP_SUPPORT_DIR"], !override.isEmpty {
+    if let override = environment["NEURAL_JANITOR_APP_SUPPORT_DIR"] ?? environment["SMART_TAB_HYGIENE_APP_SUPPORT_DIR"] ?? environment["MIMO_APP_SUPPORT_DIR"], !override.isEmpty {
         dir = URL(fileURLWithPath: override, isDirectory: true)
     } else {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        dir = appSupport.appendingPathComponent("Smart Tab Hygiene", isDirectory: true)
-        let legacyDir = appSupport.appendingPathComponent("Mimo", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: dir.path),
-           FileManager.default.fileExists(atPath: legacyDir.path) {
-            try? FileManager.default.copyItem(at: legacyDir, to: dir)
+        dir = appSupport.appendingPathComponent("Neural-Janitor", isDirectory: true)
+        let legacyDirs = [
+            appSupport.appendingPathComponent("Smart Tab Hygiene", isDirectory: true),
+            appSupport.appendingPathComponent("Mimo", isDirectory: true),
+        ]
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            for legacyDir in legacyDirs where FileManager.default.fileExists(atPath: legacyDir.path) {
+                try? FileManager.default.copyItem(at: legacyDir, to: dir)
+                break
+            }
         }
     }
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -293,11 +303,16 @@ final class IdlePredictor {
         let decision = decisionSnapshot()
         let matureSamples = max(metrics.trainingSamples, activityCount)
         let maturity = min(1.0, Double(matureSamples) / 1_000.0)
+        let devices = localDeviceStatus(usingCoreML: usingCoreML)
+        let markerStates = hardwareMarkerStates(from: devices)
         let runtimeNote = usingCoreML
             ? "Core ML selects the exact ANE/GPU/CPU target internally; public APIs expose availability and requested compute units, not the per-inference processor."
             : "Core ML model is not loaded yet, so predictions use a local CPU fallback while more browser activity is collected and retraining continues."
         var payload: [String: Any] = [
             "type": "health",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
             "ok": true,
             "modelMode": mode,
             "modelLoaded": usingCoreML,
@@ -317,7 +332,15 @@ final class IdlePredictor {
             "powerMode": "low",
             "powerSignal": recentInferenceActivity(),
             "inferenceCount": inferenceCount,
-            "devices": localDeviceStatus(usingCoreML: usingCoreML),
+            "devices": devices,
+            "telemetryStatus": "online",
+            "hardwareTelemetry": [
+                "source": "companion",
+                "status": "online",
+                "computeUnits": usingCoreML ? "all" : "cpu",
+                "markerStates": markerStates,
+                "devices": devices,
+            ],
             "sampledAt": Date().timeIntervalSince1970 * 1000,
             "note": runtimeNote,
         ]
@@ -783,7 +806,7 @@ final class IdlePredictor {
 
         let metadata = MLModelMetadata(
             author: NSFullUserName(),
-            shortDescription: "Predicts whether the Mac user is away using browser idle events and tab activity context.",
+            shortDescription: "The Chronos Engine predicts whether the Mac user is away using browser idle events and tab activity context.",
             license: "Local model, user-owned data",
             version: "1.0"
         )
@@ -805,6 +828,15 @@ func isAppleSiliconMac() -> Bool {
 
 func hasMetalGPU() -> Bool {
     isAppleSiliconMac() || MTLCreateSystemDefaultDevice() != nil
+}
+
+func hardwareMarkerStates(from devices: [[String: Any]]) -> [String: String] {
+    var states: [String: String] = [:]
+    for device in devices {
+        guard let key = device["key"] as? String else { continue }
+        states[key] = (device["state"] as? String) ?? "standby"
+    }
+    return states
 }
 
 func localDeviceStatus(usingCoreML: Bool) -> [[String: Any]] {
@@ -952,7 +984,7 @@ let store = ActivityStore()
 let predictor = IdlePredictor(store: store)
 let pageClassifier = LocalPageClassifier()
 
-writeLog("Smart Tab Hygiene Companion started (pid: \(ProcessInfo.processInfo.processIdentifier))")
+writeLog("\(appName) Companion started; \(engineCodename) online (pid: \(ProcessInfo.processInfo.processIdentifier))")
 
 DispatchQueue.global(qos: .utility).async {
     while true {
@@ -984,7 +1016,13 @@ while true {
                 category: (message["category"] as? String) ?? "other"
             ))
         }
-        writeMessage(["type": "activityAck", "ok": true])
+        writeMessage([
+            "type": "activityAck",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
+            "ok": true,
+        ])
 
     case "predict":
         let predictions = predictor.predict()
@@ -998,6 +1036,9 @@ while true {
         }
         writeMessage([
             "type": "idlePredictions",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
             "predictions": predDict,
             "modelMode": predictor.mode,
             "activityCount": store.count,
@@ -1007,9 +1048,23 @@ while true {
     case "retrain":
         do {
             try predictor.retrain()
-            writeMessage(["type": "retrainResult", "ok": true, "modelMode": predictor.mode])
+            writeMessage([
+                "type": "retrainResult",
+                "protocolVersion": ipcProtocolVersion,
+                "appName": appName,
+                "engineCodename": engineCodename,
+                "ok": true,
+                "modelMode": predictor.mode,
+            ])
         } catch {
-            writeMessage(["type": "retrainResult", "ok": false, "error": "\(error)"])
+            writeMessage([
+                "type": "retrainResult",
+                "protocolVersion": ipcProtocolVersion,
+                "appName": appName,
+                "engineCodename": engineCodename,
+                "ok": false,
+                "error": "\(error)",
+            ])
         }
 
     case "health":
@@ -1018,14 +1073,24 @@ while true {
         writeMessage(payload)
 
     case "classifyURL":
-        writeMessage(pageClassifier.classify(
+        var result = pageClassifier.classify(
             url: (message["url"] as? String) ?? "",
             title: (message["title"] as? String) ?? "",
             description: (message["description"] as? String) ?? "",
             text: (message["text"] as? String) ?? ""
-        ))
+        )
+        result["protocolVersion"] = ipcProtocolVersion
+        result["appName"] = appName
+        result["engineCodename"] = engineCodename
+        writeMessage(result)
 
     default:
-        writeMessage(["type": "error", "message": "Unknown message type: \(type)"])
+        writeMessage([
+            "type": "error",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
+            "message": "Unknown message type: \(type)",
+        ])
     }
 }

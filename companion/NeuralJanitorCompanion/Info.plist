@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.smarttabhygiene.companion</string>
+    <string>com.neuraljanitor.companion</string>
     <key>CFBundleName</key>
-    <string>SmartTabHygieneCompanion</string>
+    <string>NeuralJanitorCompanion</string>
     <key>CFBundleDisplayName</key>
-    <string>Smart Tab Hygiene Companion</string>
+    <string>Neural-Janitor Companion</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -15,7 +15,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>SmartTabHygieneCompanion</string>
+    <string>NeuralJanitorCompanion</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>

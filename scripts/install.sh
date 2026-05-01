@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
-# Smart Tab Hygiene — Install / Register Native Messaging Host
+# Neural-Janitor — Install / Register Native Messaging Host
 #
 # This script:
-#   1. Builds the SmartTabHygieneCompanion Swift executable
+#   1. Builds the NeuralJanitorCompanion Swift executable
 #   2. Registers it as a Native Messaging host for Chrome & Edge
 #   3. Creates the JSON manifest in the correct browser directories
 #
@@ -16,11 +16,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-COMPANION_DIR="$PROJECT_DIR/companion/SmartTabHygieneCompanion"
-HOST_NAME="com.smarttabhygiene.companion"
-BINARY_PATH="$HOME/.local/bin/SmartTabHygieneCompanion"
-EXTENSION_ID="${1:-${SMART_TAB_HYGIENE_EXTENSION_ID:-${MIMO_EXTENSION_ID:-REPLACE_WITH_EXTENSION_ID}}}"
-PREBUILT_BINARY="${SMART_TAB_HYGIENE_COMPANION_BINARY:-${MIMO_COMPANION_BINARY:-}}"
+COMPANION_DIR="$PROJECT_DIR/companion/NeuralJanitorCompanion"
+HOST_NAME="com.neuraljanitor.companion"
+BINARY_PATH="$HOME/.local/bin/NeuralJanitorCompanion"
+EXTENSION_ID="${1:-${NEURAL_JANITOR_EXTENSION_ID:-${SMART_TAB_HYGIENE_EXTENSION_ID:-${MIMO_EXTENSION_ID:-REPLACE_WITH_EXTENSION_ID}}}}"
+PREBUILT_BINARY="${NEURAL_JANITOR_COMPANION_BINARY:-${SMART_TAB_HYGIENE_COMPANION_BINARY:-${MIMO_COMPANION_BINARY:-}}}"
 
 # ── Colours ────────────────────────────────────────────────────────
 
@@ -30,31 +30,31 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-info()  { echo -e "${BLUE}[Smart Tab Hygiene]${NC} $*"; }
-ok()    { echo -e "${GREEN}[Smart Tab Hygiene]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[Smart Tab Hygiene]${NC} $*"; }
-err()   { echo -e "${RED}[Smart Tab Hygiene]${NC} $*" >&2; }
+info()  { echo -e "${BLUE}[Neural-Janitor]${NC} $*"; }
+ok()    { echo -e "${GREEN}[Neural-Janitor]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[Neural-Janitor]${NC} $*"; }
+err()   { echo -e "${RED}[Neural-Janitor]${NC} $*" >&2; }
 
 # ── Step 1: Build the companion ────────────────────────────────────
 
 if [ -n "$PREBUILT_BINARY" ]; then
-    info "Using prebuilt SmartTabHygieneCompanion: $PREBUILT_BINARY"
+    info "Using prebuilt NeuralJanitorCompanion: $PREBUILT_BINARY"
     if [ ! -f "$PREBUILT_BINARY" ]; then
         err "Prebuilt binary not found: $PREBUILT_BINARY"
         exit 1
     fi
     BUILD_BINARY="$PREBUILT_BINARY"
 else
-    info "Building SmartTabHygieneCompanion..."
+    info "Building NeuralJanitorCompanion..."
     cd "$COMPANION_DIR"
 
     if ! command -v swift &>/dev/null; then
-        err "Swift not found. Install Xcode/Command Line Tools, or set SMART_TAB_HYGIENE_COMPANION_BINARY=/path/to/SmartTabHygieneCompanion."
+        err "Swift not found. Install Xcode/Command Line Tools, or set NEURAL_JANITOR_COMPANION_BINARY=/path/to/NeuralJanitorCompanion."
         exit 1
     fi
 
     swift build -c release 2>&1 | tail -5
-    BUILD_BINARY="$COMPANION_DIR/.build/release/SmartTabHygieneCompanion"
+    BUILD_BINARY="$COMPANION_DIR/.build/release/NeuralJanitorCompanion"
 fi
 
 if [ ! -f "$BUILD_BINARY" ]; then
@@ -77,7 +77,7 @@ ok "Installed binary to $BINARY_PATH"
 MANIFEST_JSON=$(cat <<EOF
 {
   "name": "$HOST_NAME",
-  "description": "Smart Tab Hygiene Companion — Idle prediction via Core ML",
+  "description": "Neural-Janitor Companion — The Chronos Engine idle prediction via Core ML",
   "path": "$BINARY_PATH",
   "type": "stdio",
   "allowed_origins": [
@@ -160,7 +160,7 @@ info "4. Restart the browser"
 info ""
 info "5. The companion will start automatically when the extension"
 info "   connects. Check logs at:"
-info "   ~/Library/Application Support/Smart Tab Hygiene/companion.log"
+info "   ~/Library/Application Support/Neural-Janitor/companion.log"
 info "═══════════════════════════════════════════════════════════"
 
 ok "Installation complete!"

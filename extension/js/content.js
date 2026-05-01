@@ -1,5 +1,5 @@
 /**
- * Smart Tab Hygiene — Content Script
+ * Neural-Janitor — Content Script
  *
  * Injected into every page. Its only job is to detect meaningful user
  * interaction (clicks, keypresses, scrolls) and notify the background
