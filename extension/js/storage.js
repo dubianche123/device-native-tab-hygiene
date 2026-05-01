@@ -6,7 +6,11 @@
  */
 
 import { STORAGE_KEYS } from './constants.js';
+import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
 import { DEFAULT_IDLE_SCHEDULE, normalizeIdleSchedule } from './idle-schedule.js';
+
+const DOMAIN_CATEGORY_MEMORY_MAX = 500;
+const DOMAIN_CATEGORY_MEMORY_MIN_CONFIDENCE = 0.55;
 
 function tabKey(tabId) {
   return `${STORAGE_KEYS.TAB_ENTRY_PREFIX}${tabId}`;
@@ -148,6 +152,7 @@ export async function appendClosedRecord(record) {
     id,
     url: record.url,
     title: record.title,
+    rootDomain: record.rootDomain || getRootDomain(record.url || ''),
     favIconUrl: record.favIconUrl || '',
     sessionId: record.sessionId || null,
     closedAt: record.closedAt || Date.now(),
@@ -182,6 +187,86 @@ export async function getIdlePredictions() {
 
 export async function setIdlePredictions(predictions) {
   await chrome.storage.local.set({ [STORAGE_KEYS.IDLE_PREDICTIONS]: predictions });
+}
+
+// ── Domain Category Memory ───────────────────────────────────────────
+
+export async function getDomainCategoryMemory() {
+  const data = await chrome.storage.local.get(STORAGE_KEYS.DOMAIN_CATEGORY_MEMORY);
+  return data[STORAGE_KEYS.DOMAIN_CATEGORY_MEMORY] || {};
+}
+
+async function setDomainCategoryMemory(memory) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.DOMAIN_CATEGORY_MEMORY]: memory });
+}
+
+function bestCategoryFromCounts(counts = {}) {
+  const entries = Object.entries(counts).filter(([, count]) => count > 0);
+  if (entries.length === 0) return null;
+  entries.sort((a, b) => b[1] - a[1]);
+  const [category, count] = entries[0];
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  return { category, count, total, dominance: total > 0 ? count / total : 0 };
+}
+
+export async function rememberDomainCategory({ url, category, confidence = 0, source = '' } = {}) {
+  if (!url || !category || category === 'other' || source === 'domain-memory') return null;
+  if ((confidence || 0) < DOMAIN_CATEGORY_MEMORY_MIN_CONFIDENCE) return null;
+
+  const rootDomain = getRootDomain(url);
+  if (!rootDomain || !allowsRootDomainLearning(rootDomain)) return null;
+
+  const memory = await getDomainCategoryMemory();
+  const current = memory[rootDomain] || {
+    counts: {},
+    confidenceSum: {},
+    samples: 0,
+    createdAt: Date.now(),
+  };
+
+  current.counts[category] = (current.counts[category] || 0) + 1;
+  current.confidenceSum[category] = (current.confidenceSum[category] || 0) + confidence;
+  current.samples = (current.samples || 0) + 1;
+  current.lastCategory = category;
+  current.lastSource = source || 'local';
+  current.updatedAt = Date.now();
+  memory[rootDomain] = current;
+
+  const domains = Object.keys(memory);
+  if (domains.length > DOMAIN_CATEGORY_MEMORY_MAX) {
+    domains
+      .sort((a, b) => (memory[a].updatedAt || 0) - (memory[b].updatedAt || 0))
+      .slice(0, domains.length - DOMAIN_CATEGORY_MEMORY_MAX)
+      .forEach(domain => delete memory[domain]);
+  }
+
+  await setDomainCategoryMemory(memory);
+  return { rootDomain, ...current };
+}
+
+export async function inferDomainCategory(url) {
+  const rootDomain = getRootDomain(url);
+  if (!rootDomain || !allowsRootDomainLearning(rootDomain)) return null;
+
+  const memory = await getDomainCategoryMemory();
+  const record = memory[rootDomain];
+  if (!record) return null;
+
+  const best = bestCategoryFromCounts(record.counts);
+  if (!best) return null;
+
+  const avgConfidence = (record.confidenceSum?.[best.category] || 0) / best.count;
+  const enoughEvidence = best.count >= 2 || (best.count === 1 && avgConfidence >= 0.8);
+  if (!enoughEvidence || best.dominance < 0.6) return null;
+
+  return {
+    rootDomain,
+    category: best.category,
+    samples: best.total,
+    dominance: best.dominance,
+    confidence: Math.min(0.86, 0.58 + best.dominance * 0.18 + Math.log2(best.count + 1) * 0.04),
+    source: 'domain-memory',
+  };
 }
 
 // ── User Settings ─────────────────────────────────────────────────────

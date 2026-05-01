@@ -34,7 +34,7 @@ flowchart TB
     direction LR
     popup["🖥️ Popup UI<br/>Modes · Settings · ML console"]
     tracker["📍 Tab Tracker<br/>Focus · dwell · interactions"]
-    category["🏷️ Category Engine<br/>Domain map · local signals"]
+    category["🏷️ Category Engine<br/>Domain map · local signals · domain memory"]
     hygiene["🧹 Hygiene Orchestrator<br/>Check · AI Clean · test tags"]
     settings[("⚙️ Local Settings<br/>close-time caps · calendar · whitelist")]
     closedLog[("↩️ Closed Tab Log<br/>restore records")]
@@ -118,6 +118,7 @@ Neural-Janitor's main learner is the close-time model: it learns how long each k
 - **Category-aware retention**: AI tools, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and uncategorized pages each get their own default timeout. Settings expose each category as a **maximum close-after time** slider up to 30 days, with the current ML × importance close time and final used time shown beside it.
 - **Whitelist and timed blacklist**: Whitelisted domains are never closed. Timed blacklist rules use a fixed per-domain close time with numeric hours/minutes, capped at 99 hours, and are excluded from closure learning just like whitelist traffic.
 - **Manual closure learning**: Browser tab closes and the popup's Close & Log action become local learning samples. Neural-Janitor learns from foreground dwell and time spent in the background, while automatic cleanup samples are kept as context only so the system does not reinforce its own decisions.
+- **Root-domain fallback learning**: Pages that still land in `Other` are also learned by root domain. A recurring site such as a language tool, broker, anime site, or niche documentation host can get its own learned close time instead of being mixed into one huge uncategorized bucket.
 - **AI Tools category**: ChatGPT, Claude, Gemini, DeepSeek, Hugging Face, Perplexity, Qwen, Kimi, Doubao, and similar tools are classified separately and default to a 30-day retention window.
 - **Holiday-aware idle predictions**: Settings can enable Japanese or Chinese holiday calendars. The ML Insights panel marks each predicted day as Workday, Weekend, or a named holiday / extended period such as Golden Week or National Day, and includes workday / weekend reference sleep-wake windows for fallback predictions.
 - **AI Cleanup**: The popup can close or tag low-importance tabs to reduce tab count first, with bounded memory-pressure cleanup because macOS / Chromium may reclaim memory lazily. It protects high-priority categories such as AI tools and work tabs, honors the whitelist, and respects Test mode.
@@ -130,7 +131,7 @@ Neural-Janitor's main learner is the close-time model: it learns how long each k
 
 ## Category Closure Time Rules
 
-Tabs are assigned a closure time based on their category, learned manual-close behavior, and per-tab importance. The Settings sliders are upper limits: the model can choose a shorter ML-calculated time, but it cannot keep a tab past the configured limit. The lower safety floor is fixed by the system so users do not have to tune two competing values.
+Tabs are assigned a closure time based on their category, learned manual-close behavior, root-domain fallback history, and per-tab importance. The Settings sliders are upper limits: the model can choose a shorter ML-calculated time, but it cannot keep a tab past the configured limit. The lower safety floor is fixed by the system so users do not have to tune two competing values.
 
 | Category | Max Idle Time | Rationale |
 |----------|--------------|-----------|
@@ -157,10 +158,10 @@ The system is split into two deployable artifacts:
 The tracker is the signal layer, not the cleanup decision-maker. It records four facts per tab: when it entered foreground, when it left foreground, cumulative foreground dwell, and interaction count. Cleanup uses the background clock (`now - lastBackgroundedAt`) against an effective closure time. Foreground/background ratio is normalized into an importance multiplier, capped at `0.75x..1.75x`, then combined with the learned close time and an idle-context multiplier (`0.75x` idle, `0.9x` predicted idle, `1.15x` active). The user's closure time limit remains the final cap. Active, pinned, and audible tabs are protected before any automatic close.
 
 ### 2. Manual Closure Learner
-Real browser closes (`Ctrl+W` / close button) and popup closes are stored in `chrome.storage.local` as closure-learning samples with category, foreground dwell, background age, interaction count, and close time. Learning starts from short-but-real samples of about 15 seconds and needs 3 useful manual closes for a provisional learned close time. Learned close times prefer meaningful manual background-age samples, with foreground dwell as a fallback for active-close patterns. Programmatic closes from stale checks and AI Cleanup are explicitly suppressed from the browser-close path and recorded as context-only auto samples.
+Real browser closes (`Ctrl+W` / close button) and popup closes are stored in `chrome.storage.local` as closure-learning samples with category, root domain, foreground dwell, background age, interaction count, and close time. Learning starts from short-but-real samples of about 15 seconds and needs 3 useful manual closes for a provisional learned close time. Learned close times prefer meaningful manual background-age samples, with foreground dwell as a fallback for active-close patterns. If a category is too broad, especially `Other`, the root-domain learned close time is used before falling back to category-level learning. Programmatic closes from stale checks and AI Cleanup are explicitly suppressed from the browser-close path and recorded as context-only auto samples.
 
 ### 3. Local Page Classifier
-When the extension cannot confidently categorize a URL, it asks the companion app. The companion uses the Apple `NaturalLanguage` framework to tokenize the page title, description, and content, scoring them against a weighted taxonomy.
+When the extension cannot confidently categorize a URL, it asks the companion app. The companion uses the Apple `NaturalLanguage` framework to tokenize the page title, description, and content, scoring them against a weighted taxonomy. The browser side also keeps a small local root-domain category memory, so repeated high-confidence classifications can help future low-confidence pages under the same root.
 
 ### 4. Auxiliary Context Predictor
 The companion builds a 9-feature `TrainingSample` from historical activity: day of week, hour, minute, weekend flag, minutes since last active, active events in the last 24 hours, active days in the last 7 days, tab count, and average dwell minutes. It trains a `MLBoostedTreeClassifier` and loads it through Core ML with `computeUnits = .all`.

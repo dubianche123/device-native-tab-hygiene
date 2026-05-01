@@ -27,8 +27,10 @@ import {
   getReturnNotification, setReturnNotification, clearReturnNotification,
   getActiveSession, setActiveSession, clearActiveSession,
   getTaggedTabs, tagTab, untagTab, clearAllTags,
+  inferDomainCategory, rememberDomainCategory,
 } from './storage.js';
 import { categorizePage } from './categorizer.js';
+import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
 import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary, resetClosureLearning } from './closure-learner.js';
 import {
   classifyURL,
@@ -139,6 +141,46 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function categoryFromDomainMemory(memoryHit) {
+  if (!memoryHit?.category) return null;
+  const categoryInfo = CATEGORIES[memoryHit.category];
+  if (!categoryInfo) return null;
+  return {
+    key: memoryHit.category,
+    ...categoryInfo,
+    confidence: memoryHit.confidence || 0.6,
+    source: 'domain-memory',
+    rootDomain: memoryHit.rootDomain,
+  };
+}
+
+function shouldUseRootDomainThreshold(entry) {
+  const confidence = Number(entry?.categoryConfidence || 0);
+  const source = entry?.categorySource || '';
+  return (entry?.category || 'other') === 'other'
+    || source === 'domain-memory'
+    || confidence < 0.7;
+}
+
+async function upgradeWithDomainMemory(url, cat) {
+  if (!url || (cat.key !== 'other' && (cat.confidence || 0) >= 0.7)) return cat;
+  const memoryCat = categoryFromDomainMemory(await inferDomainCategory(url));
+  return memoryCat || cat;
+}
+
+async function categorizeWithDomainMemory(input = {}, { remember = true } = {}) {
+  const cat = await upgradeWithDomainMemory(input.url, categorizePage(input));
+  if (remember) {
+    await rememberDomainCategory({
+      url: input.url,
+      category: cat.key,
+      confidence: cat.confidence,
+      source: cat.source,
+    });
+  }
+  return cat;
+}
+
 function normalizedTabImportance(entry, backgroundAgeMs) {
   const foregroundDwellMs = Math.max(0, entry?.dwellMs || 0);
   const safeBackgroundAgeMs = Math.max(0, backgroundAgeMs || 0);
@@ -176,12 +218,16 @@ async function buildCleanupContext(settings = {}) {
 
 function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(), context = {}) {
   const categoryKey = entry.category || 'other';
+  const rootDomain = entry.rootDomain || getRootDomain(entry.url || '');
   const backgroundAgeMs = closureAgeMs(entry, now);
   const importance = normalizedTabImportance(entry, backgroundAgeMs);
   const contextMultiplier = idleContextMultiplier(context);
   const closureLimit = settings.customThresholds?.[categoryKey];
   const hasClosureLimit = typeof closureLimit === 'number' && closureLimit > 0;
-  const learnedThreshold = learnedThresholds?.[categoryKey];
+  const domainLearningAllowed = shouldUseRootDomainThreshold(entry) && allowsRootDomainLearning(rootDomain);
+  const domainLearnedThreshold = domainLearningAllowed ? learnedThresholds?.__domains?.[rootDomain] : null;
+  const hasDomainThreshold = typeof domainLearnedThreshold === 'number' && domainLearnedThreshold > 0;
+  const learnedThreshold = hasDomainThreshold ? domainLearnedThreshold : learnedThresholds?.[categoryKey];
   const hasLearnedThreshold = typeof learnedThreshold === 'number' && learnedThreshold > 0;
   const defaultThreshold = CATEGORIES[categoryKey]?.maxAgeMs || CATEGORIES.other?.maxAgeMs || 7 * 24 * 60 * 60 * 1000;
   const limitMs = hasClosureLimit ? closureLimit : defaultThreshold;
@@ -195,12 +241,14 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
       MIN_EFFECTIVE_THRESHOLD_MS,
       Math.max(MIN_EFFECTIVE_THRESHOLD_MS, defaultThreshold * 2),
     );
-    thresholdSource = 'learned_x_importance_x_context';
+    thresholdSource = hasDomainThreshold ? 'domain_learned_x_importance_x_context' : 'learned_x_importance_x_context';
   }
 
   const maxAgeMs = Math.min(modelMaxAgeMs, limitMs);
   if (maxAgeMs < modelMaxAgeMs) {
-    thresholdSource = hasLearnedThreshold ? 'learned_x_importance_x_context_capped' : 'default_capped';
+    thresholdSource = hasLearnedThreshold
+      ? (hasDomainThreshold ? 'domain_learned_x_importance_x_context_capped' : 'learned_x_importance_x_context_capped')
+      : 'default_capped';
   }
 
   const remainingMs = Math.max(0, maxAgeMs - backgroundAgeMs);
@@ -216,6 +264,7 @@ function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(
   return {
     ...importance,
     categoryKey,
+    rootDomain,
     baseThresholdMs: hasLearnedThreshold ? learnedThreshold : defaultThreshold,
     contextMultiplier,
     modelMaxAgeMs,
@@ -289,6 +338,8 @@ async function recordTabClosureForLearning(entry, type, now = Date.now()) {
   await recordClosureSample({
     type,
     category: entry.category || 'other',
+    url: entry.url,
+    rootDomain: entry.rootDomain || getRootDomain(entry.url),
     dwellMs: entry.dwellMs || 0,
     ageMs: closureAgeMs(entry, now),
     backgroundAgeMs: entry.lastBackgroundedAt ? Math.max(0, now - entry.lastBackgroundedAt) : null,
@@ -389,7 +440,8 @@ async function startActiveSession(tab, reason = 'activated') {
   await closeActiveSession(reason);
 
   const now = Date.now();
-  const cat = categorizePage({ url: tab.url, title: tab.title || '' });
+  const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
+  const rootDomain = getRootDomain(tab.url);
   const prev = await getTabEntry(tab.id) || {};
   await upsertTabEntry(tab.id, {
     url: tab.url,
@@ -398,6 +450,7 @@ async function startActiveSession(tab, reason = 'activated') {
     category: cat.key,
     categorySource: cat.source,
     categoryConfidence: cat.confidence,
+    rootDomain,
     lastVisited: now,
     lastActivatedAt: now,
     lastForegroundAt: now,
@@ -417,7 +470,8 @@ async function resumeActiveFocusedTab() {
 
 async function noteTabActivity(tab, timestamp = Date.now()) {
   if (!tab?.id || !isTrackableUrl(tab.url)) return;
-  const cat = categorizePage({ url: tab.url, title: tab.title || '' });
+  const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' }, { remember: false });
+  const rootDomain = getRootDomain(tab.url);
   await updateTabEntry(tab.id, (entry) => ({
     ...(entry || {}),
     url: tab.url,
@@ -426,6 +480,7 @@ async function noteTabActivity(tab, timestamp = Date.now()) {
     category: cat.key,
     categorySource: cat.source,
     categoryConfidence: cat.confidence,
+    rootDomain,
     lastVisited: timestamp,
     lastInteractionAt: timestamp,
     interactions: ((entry && entry.interactions) || 0) + 1,
@@ -491,7 +546,8 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
   let entry = await getTabEntry(numericTabId);
 
   if (tab && isTrackableUrl(tab.url)) {
-    const cat = categorizePage({ url: tab.url, title: tab.title || '' });
+    const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
+    const rootDomain = getRootDomain(tab.url);
     entry = {
       ...(entry || {}),
       url: tab.url,
@@ -500,6 +556,7 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
       category: entry?.category || cat.key,
       categorySource: entry?.categorySource || cat.source,
       categoryConfidence: entry?.categoryConfidence || cat.confidence,
+      rootDomain: entry?.rootDomain || rootDomain,
       lastVisited: entry?.lastVisited || Date.now(),
       openedAt: entry?.openedAt || Date.now(),
       dwellMs: entry?.dwellMs || 0,
@@ -611,7 +668,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (!isTrackableUrl(tab.url)) return;
   const now = Date.now();
-  const cat = categorizePage({ url: tab.url, title: tab.title || '' });
+  const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
+  const rootDomain = getRootDomain(tab.url);
   await upsertTabEntry(tab.id, {
     url: tab.url,
     title: tab.title || '',
@@ -619,6 +677,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
     category: cat.key,
     categorySource: cat.source,
     categoryConfidence: cat.confidence,
+    rootDomain,
     lastVisited: now,
     lastForegroundAt: tab.active ? now : null,
     lastBackgroundedAt: tab.active ? null : now,
@@ -639,7 +698,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (navigated && active?.tabId === tabId) {
     await closeActiveSession('navigation');
   }
-  const cat = categorizePage({ url: tab.url, title: tab.title || '' });
+  const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
+  const rootDomain = getRootDomain(tab.url);
   const now = Date.now();
   const lastBackgroundedAt = tab.active
     ? null
@@ -651,6 +711,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     category: cat.key,
     categorySource: cat.source,
     categoryConfidence: cat.confidence,
+    rootDomain,
     lastVisited: now,
     lastForegroundAt: tab.active ? (prev.lastForegroundAt || now) : (prev.lastForegroundAt || null),
     lastBackgroundedAt,
@@ -1257,7 +1318,8 @@ async function snapshotAllTabs() {
     if (!isTrackableUrl(tab.url)) continue;
     const prev = existing[tab.id] || {};
     const sameUrl = prev.url === tab.url;
-    const cat = categorizePage({ url: tab.url, title: tab.title || '' });
+    const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
+    const rootDomain = getRootDomain(tab.url);
     const entry = {
       url: tab.url,
       title: tab.title || '',
@@ -1265,6 +1327,7 @@ async function snapshotAllTabs() {
       category: cat.key,
       categorySource: cat.source,
       categoryConfidence: cat.confidence,
+      rootDomain,
       lastVisited: sameUrl ? (prev.lastVisited || now) : now,
       lastForegroundAt: sameUrl ? (prev.lastForegroundAt || null) : (tab.active ? now : null),
       lastBackgroundedAt: sameUrl
@@ -1404,8 +1467,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false });
           break;
         }
-        let cat = categorizePage({
-          url: msg.url || sender.tab.url,
+        const pageUrl = msg.url || sender.tab.url;
+        let cat = await categorizeWithDomainMemory({
+          url: pageUrl,
           title: msg.title || sender.tab.title || '',
           description: msg.description || '',
           text: msg.text || '',
@@ -1430,13 +1494,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
           }
         }
+        if (String(cat.source || '').startsWith('companion')) {
+          await rememberDomainCategory({
+            url: pageUrl,
+            category: cat.key,
+            confidence: cat.confidence,
+            source: cat.source,
+          });
+        }
         await upsertTabEntry(sender.tab.id, {
-          url: msg.url || sender.tab.url,
+          url: pageUrl,
           title: msg.title || sender.tab.title || '',
           favIconUrl: sender.tab.favIconUrl || '',
           category: cat.key,
           categorySource: cat.source,
           categoryConfidence: cat.confidence,
+          rootDomain: getRootDomain(pageUrl),
           pageSeenAt: msg.timestamp || Date.now(),
         });
         sendResponse({ ok: true });

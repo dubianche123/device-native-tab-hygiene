@@ -1040,9 +1040,10 @@ final class LocalPageClassifier {
         "nsfw": ["adult", "explicit", "nsfw", "xxx", "erotic", "cam", "fetish", "porn", "hentai"],
         "finance": [
             "bank", "banking", "brokerage", "portfolio", "credit", "mortgage", "invoice", "payment", "transaction", "crypto", "investment", "trading",
-            "mufg", "smbc", "mizuhobank", "rakuten-sec", "sbisec", "monex", "jpx", "alipay", "tenpay", "eastmoney", "xueqiu", "futunn", "tigerbrokers", "rakuten-card",
-            "銀行", "証券", "投資", "株価", "資産", "口座", "決済", "银行", "证券", "投资", "股票", "基金", "理财", "支付", "账单", "财富",
-            "invest", "stock", "investor", "dividend", "equity", "portfolio",
+            "mufg", "smbc", "mizuhobank", "rakuten-sec", "sbisec", "monex", "jpx", "alipay", "tenpay", "eastmoney", "xueqiu", "futunn", "tigerbrokers", "rakuten-card", "interactivebrokers", "ibkr",
+            "金融危機", "円安", "円高", "日銀", "為替", "金利", "インフレ", "景気後退",
+            "銀行", "証券", "投資", "株価", "資産", "口座", "決済", "银行", "证券", "投资", "股票", "基金", "理财", "支付", "账单", "财富", "金融危机", "日元贬值", "日元升值", "汇率", "通胀", "央行", "加息", "降息", "债券",
+            "invest", "stock", "investor", "dividend", "equity", "portfolio", "financial crisis", "recession", "inflation", "exchange rate", "bond yield",
         ],
         "ai": [
             "chatgpt", "openai", "claude", "anthropic", "gemini", "deepseek", "hugging face", "huggingface", "perplexity", "copilot", "mistral", "qwen", "kimi", "doubao", "chatglm", "grok", "phind", "openrouter", "lmarena", "replicate", "cursor", "windsurf", "prompt", "assistant", "llm", "large language model", "model card", "transformers", "inference", "ai studio", "model playground", "openai.com", "claude.ai", "perplexity.ai",
@@ -1070,19 +1071,19 @@ final class LocalPageClassifier {
             "ニュース", "速報", "報道", "記事", "社会", "政治", "経済", "新闻", "快讯", "报道", "时政", "财经", "热点", "专栏",
         ],
         "shopping": [
-            "cart", "checkout", "order", "shipping", "product", "sale", "coupon", "wishlist", "price",
+            "cart", "checkout", "order", "shipping", "product", "sale", "coupon", "wishlist", "price", "microsoft rewards", "bing rewards", "reward points",
             "taobao", "tmall", "jd.com", "pinduoduo", "rakuten.co.jp", "mercari", "yodobashi", "zozo", "kakaku",
-            "カート", "購入", "注文", "配送", "商品", "セール", "価格", "购物车", "购买", "订单", "优惠券", "价格",
+            "カート", "購入", "注文", "配送", "商品", "セール", "価格", "ポイント", "购物车", "购买", "订单", "优惠券", "价格", "积分",
         ],
         "entertainment": [
-            "watch", "stream", "episode", "movie", "music", "playlist", "gameplay", "trailer", "video",
-            "bilibili", "nicovideo", "niconico", "abema", "tver", "pixiv", "douyin", "kuaishou", "youku", "iqiyi", "acfun", "music.163",
-            "動画", "映画", "音楽", "配信", "アニメ", "漫画", "ゲーム", "视频", "电影", "音乐", "直播", "动漫", "游戏", "播放",
+            "watch", "stream", "episode", "movie", "music", "playlist", "gameplay", "trailer", "video", "anime", "manga",
+            "bilibili", "nicovideo", "niconico", "abema", "tver", "pixiv", "douyin", "kuaishou", "youku", "iqiyi", "acfun", "music.163", "anilist", "myanimelist", "bangumi", "mikanani", "dmhy", "agefans",
+            "動画", "映画", "音楽", "配信", "アニメ", "漫画", "ゲーム", "视频", "电影", "音乐", "直播", "动漫", "游戏", "播放", "番剧",
         ],
         "reference": [
             "documentation", "tutorial", "reference", "manual", "guide", "course", "lesson", "api", "wiki", "stackoverflow",
-            "baike", "wikipedia", "csdn", "cnblogs", "juejin", "segmentfault", "oschina", "teratail", "note.com", "hatena", "kotobank", "weblio", "developer.aliyun", "cloud.tencent", "infoq.cn", "sspai", "zhihu", "weread", "duolingo", "cambridge dictionary",
-            "百科", "辞書", "解説", "使い方", "講座", "学習", "词条", "教程", "指南", "文档", "学习", "课程", "知识库", "知乎", "微信读书",
+            "baike", "wikipedia", "csdn", "cnblogs", "juejin", "segmentfault", "oschina", "teratail", "note.com", "hatena", "kotobank", "weblio", "developer.aliyun", "cloud.tencent", "infoq.cn", "sspai", "zhihu", "weread", "duolingo", "duolingguo", "cambridge dictionary", "godic", "eudic", "nowcoder",
+            "百科", "辞書", "解説", "使い方", "講座", "学習", "単語", "翻訳", "词条", "教程", "指南", "文档", "学习", "课程", "知识库", "知乎", "微信读书", "德语助手", "词典", "编程题", "面试题", "接口文档",
         ],
     ]
 

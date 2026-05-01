@@ -2,7 +2,7 @@
  * Neural-Janitor — Closure Learner
  *
  * Learns from HOW the user closes tabs to dynamically adjust category
- * retention thresholds. Three data streams:
+ * and root-domain retention thresholds. Three data streams:
  *
  *   manual_browser_close  — user closed tab via Ctrl+W / close button
  *   manual_popup_close    — user closed tab via the extension popup
@@ -12,14 +12,15 @@
  * for context only (stored with weight 0.2) so the system does not reinforce
  * its own decisions.
  *
- * Each sample records: category, foreground dwell, background age,
- * interactions, openedAt, lastVisited, and hourOfDay.
+ * Each sample records: category, rootDomain, foreground dwell, background
+ * age, interactions, openedAt, lastVisited, and hourOfDay.
  *
- * Per-category stats are used to recommend adjusted retention thresholds
- * once enough short-but-real manual close samples exist.
+ * Per-category and per-root-domain stats recommend adjusted retention
+ * thresholds once enough short-but-real manual close samples exist.
  */
 
 import { CATEGORIES, DEFAULT_CATEGORY, STORAGE_KEYS } from './constants.js';
+import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
 
 const MAX_SAMPLES = 2000;
 const MIN_MANUAL_SAMPLES = 3;      // Fast provisional learning from a few repeated manual closes
@@ -87,6 +88,7 @@ function learnedThresholdFloor(category) {
  * @param {number} sample.lastVisited
  * @param {number} [sample.backgroundAgeMs] - time since tab left foreground
  * @param {number} [sample.lastBackgroundedAt] - timestamp when tab left foreground
+ * @param {string} [sample.url] - used only to derive rootDomain for local learning
  */
 export async function recordClosureSample(sample) {
   const data = await getClosureData();
@@ -96,6 +98,7 @@ export async function recordClosureSample(sample) {
   data.samples.push({
     type,
     category: sample.category || 'other',
+    rootDomain: sample.rootDomain || getRootDomain(sample.url || ''),
     dwellMs: sample.dwellMs || 0,
     ageMs: sample.ageMs || 0,
     backgroundAgeMs: sample.backgroundAgeMs ?? null,
@@ -115,6 +118,67 @@ export async function recordClosureSample(sample) {
 
   await setClosureData(data);
   return sample;
+}
+
+function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key) {
+  const catInfo = CATEGORIES[defaultCategory] || DEFAULT_CATEGORY;
+  const defaultThreshold = catInfo.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
+  const manualCount = b.manualDwell.length;
+  const autoCount = b.autoDwell.length;
+
+  const manualDwellMs = median(b.manualDwell);
+  const manualBackgroundAgeMs = median(b.manualBackgroundAge);
+  const manualP25Dwell = percentile(b.manualDwell, 0.25);
+  const manualP25BackgroundAge = percentile(b.manualBackgroundAge, 0.25);
+  const autoDwellMs = median(b.autoDwell);
+  const autoBackgroundAgeMs = median(b.autoBackgroundAge);
+  const recommendationDwellSamples = b.manualDwell.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
+  const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
+  const thresholdFloor = learnedThresholdFloor(defaultCategory);
+
+  let recommendedThresholdMs = null;
+  let thresholdDelta = null;
+  const recommendationSampleCount = Math.max(validBackgroundSamples.length, recommendationDwellSamples.length);
+
+  if (validBackgroundSamples.length >= MIN_MANUAL_SAMPLES) {
+    const medianBackgroundAge = median(validBackgroundSamples);
+    recommendedThresholdMs = Math.max(
+      thresholdFloor,
+      Math.min(defaultThreshold * 2, medianBackgroundAge * 1.5),
+    );
+    thresholdDelta = recommendedThresholdMs - defaultThreshold;
+  } else if (recommendationDwellSamples.length >= MIN_MANUAL_SAMPLES) {
+    const recommendationDwellMs = median(recommendationDwellSamples);
+    recommendedThresholdMs = Math.max(
+      thresholdFloor,
+      Math.min(defaultThreshold * 2, recommendationDwellMs * 1.5),
+    );
+    thresholdDelta = recommendedThresholdMs - defaultThreshold;
+  }
+
+  const hourCounts = {};
+  for (const h of b.hourDist) hourCounts[h] = (hourCounts[h] || 0) + 1;
+  const peakHour = Object.entries(hourCounts)
+    .sort((a, c) => c[1] - a[1])[0]?.[0];
+
+  return {
+    key,
+    category: defaultCategory,
+    manualDwellMs,
+    manualBackgroundAgeMs,
+    manualP25Dwell,
+    manualP25BackgroundAge,
+    autoDwellMs,
+    autoBackgroundAgeMs,
+    manualCount,
+    autoCount,
+    recommendationSampleCount,
+    totalSamples: manualCount + autoCount,
+    peakClosureHour: peakHour != null ? Number(peakHour) : null,
+    recommendedThresholdMs,
+    thresholdDelta,
+    defaultThresholdMs: defaultThreshold,
+  };
 }
 
 // ── Per-category statistics ───────────────────────────────────────────
@@ -163,74 +227,68 @@ export async function getCategoryClosureStats() {
 
   const stats = {};
   for (const [cat, b] of Object.entries(buckets)) {
-    const catInfo = CATEGORIES[cat] || DEFAULT_CATEGORY;
-    const defaultThreshold = catInfo.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
-    const manualCount = b.manualDwell.length;
-    const autoCount = b.autoDwell.length;
+    stats[cat] = summariseClosureBucket(cat, b, cat);
+  }
 
-    const manualDwellMs = median(b.manualDwell);
-    const manualBackgroundAgeMs = median(b.manualBackgroundAge);
-    const manualP25Dwell = percentile(b.manualDwell, 0.25);
-    const manualP25BackgroundAge = percentile(b.manualBackgroundAge, 0.25);
-    const autoDwellMs = median(b.autoDwell);
-    const autoBackgroundAgeMs = median(b.autoBackgroundAge);
-    const recommendationDwellSamples = b.manualDwell.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
-    const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
-    const thresholdFloor = learnedThresholdFloor(cat);
+  return stats;
+}
 
-    // Recommended threshold: based on how long tabs were backgrounded
-    // before the user manually closed them. This directly represents
-    // "how long is this category tolerable in the background".
-    // Use meaningful background age samples — skip near-zero values
-    // which usually indicate the tab was closed immediately or as a misclick.
-    let recommendedThresholdMs = null;
-    let thresholdDelta = null;
-    const recommendationSampleCount = Math.max(validBackgroundSamples.length, recommendationDwellSamples.length);
+function dominantCategory(categoryCounts = {}) {
+  const entries = Object.entries(categoryCounts);
+  if (entries.length === 0) return DEFAULT_CATEGORY.key;
+  entries.sort((a, b) => b[1] - a[1]);
+  return entries[0][0] || DEFAULT_CATEGORY.key;
+}
 
-    if (validBackgroundSamples.length >= MIN_MANUAL_SAMPLES) {
-      const medianBackgroundAge = median(validBackgroundSamples);
-      recommendedThresholdMs = Math.max(
-        thresholdFloor,
-        Math.min(
-          defaultThreshold * 2,  // Cap: 2x default
-          medianBackgroundAge * 1.5,
-        ),
-      );
-      thresholdDelta = recommendedThresholdMs - defaultThreshold;
-    } else if (recommendationDwellSamples.length >= MIN_MANUAL_SAMPLES) {
-      // Fallback: use foreground dwell if no background age data yet
-      const recommendationDwellMs = median(recommendationDwellSamples);
-      recommendedThresholdMs = Math.max(
-        thresholdFloor,
-        Math.min(
-          defaultThreshold * 2,
-          recommendationDwellMs * 1.5,
-        ),
-      );
-      thresholdDelta = recommendedThresholdMs - defaultThreshold;
+/**
+ * Compute per-root-domain closure statistics. This is the fallback learning
+ * layer for pages that are hard to categorise, especially broad "other" tabs.
+ */
+export async function getDomainClosureStats() {
+  const data = await getClosureData();
+  const samples = data.samples || [];
+  if (samples.length < MIN_ANY_SAMPLES) return {};
+
+  const buckets = {};
+
+  for (const s of samples) {
+    const rootDomain = s.rootDomain || getRootDomain(s.url || '');
+    if (!rootDomain || !allowsRootDomainLearning(rootDomain)) continue;
+    if (!buckets[rootDomain]) {
+      buckets[rootDomain] = {
+        manualDwell: [],
+        manualBackgroundAge: [],
+        manualInteractions: [],
+        autoDwell: [],
+        autoBackgroundAge: [],
+        hourDist: [],
+        categoryCounts: {},
+      };
     }
+    const b = buckets[rootDomain];
+    const cat = s.category || DEFAULT_CATEGORY.key;
+    b.categoryCounts[cat] = (b.categoryCounts[cat] || 0) + 1;
 
-    // Peak hour for closures (most common)
-    const hourCounts = {};
-    for (const h of b.hourDist) hourCounts[h] = (hourCounts[h] || 0) + 1;
-    const peakHour = Object.entries(hourCounts)
-      .sort((a, c) => c[1] - a[1])[0]?.[0];
+    if (isManualClosure(s.type)) {
+      b.manualDwell.push(s.dwellMs);
+      const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
+      b.manualBackgroundAge.push(backgroundAge);
+      b.manualInteractions.push(s.interactions);
+    } else {
+      b.autoDwell.push(s.dwellMs);
+      const backgroundAge = s.backgroundAgeMs != null ? s.backgroundAgeMs : s.ageMs;
+      b.autoBackgroundAge.push(backgroundAge);
+    }
+    b.hourDist.push(s.hourOfDay);
+  }
 
-    stats[cat] = {
-      manualDwellMs,
-      manualBackgroundAgeMs,
-      manualP25Dwell,
-      manualP25BackgroundAge,
-      autoDwellMs,
-      autoBackgroundAgeMs,
-      manualCount,
-      autoCount,
-      recommendationSampleCount,
-      totalSamples: manualCount + autoCount,
-      peakClosureHour: peakHour != null ? Number(peakHour) : null,
-      recommendedThresholdMs,
-      thresholdDelta,
-      defaultThresholdMs: defaultThreshold,
+  const stats = {};
+  for (const [rootDomain, b] of Object.entries(buckets)) {
+    const cat = dominantCategory(b.categoryCounts);
+    stats[rootDomain] = {
+      ...summariseClosureBucket(rootDomain, b, cat),
+      rootDomain,
+      categoryCounts: b.categoryCounts,
     };
   }
 
@@ -239,15 +297,23 @@ export async function getCategoryClosureStats() {
 
 /**
  * Get learned thresholds for all categories with enough manual data.
- * Returns { [category]: recommendedThresholdMs }
+ * Returns { [category]: recommendedThresholdMs, __domains: { [rootDomain]: recommendedThresholdMs } }
  */
 export async function getLearnedThresholds() {
   const stats = await getCategoryClosureStats();
+  const domainStats = await getDomainClosureStats();
   const thresholds = {};
 
   for (const [cat, s] of Object.entries(stats)) {
     if (s.recommendedThresholdMs != null) {
       thresholds[cat] = s.recommendedThresholdMs;
+    }
+  }
+
+  thresholds.__domains = {};
+  for (const [rootDomain, s] of Object.entries(domainStats)) {
+    if (s.recommendedThresholdMs != null) {
+      thresholds.__domains[rootDomain] = s.recommendedThresholdMs;
     }
   }
 
@@ -261,6 +327,7 @@ export async function getLearningSummary() {
   const data = await getClosureData();
   const samples = data.samples || [];
   const stats = await getCategoryClosureStats();
+  const domainStats = await getDomainClosureStats();
 
   const totalSamples = samples.length;
   const manualCount = samples.filter(
@@ -269,6 +336,8 @@ export async function getLearningSummary() {
   const autoCount = samples.filter(s => s.type === 'auto_cleanup').length;
   const categoriesWithRecommendations = Object.values(stats)
     .filter(s => s.recommendedThresholdMs != null).length;
+  const domainsWithRecommendations = Object.values(domainStats)
+    .filter(s => s.recommendedThresholdMs != null).length;
 
   return {
     totalSamples,
@@ -276,7 +345,10 @@ export async function getLearningSummary() {
     autoCount,
     categoriesTracked: Object.keys(stats).length,
     categoriesWithRecommendations,
+    domainsTracked: Object.keys(domainStats).length,
+    domainsWithRecommendations,
     stats,
+    domainStats,
   };
 }
 

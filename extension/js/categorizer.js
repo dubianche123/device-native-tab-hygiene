@@ -11,6 +11,7 @@
  */
 
 import { CATEGORIES, DEFAULT_CATEGORY, DOMAIN_MAP } from './constants.js';
+import { normalizeHostname } from './domain-utils.js';
 
 // ── Content signals for page-level classification ────────────────────
 
@@ -26,10 +27,14 @@ const CONTENT_SIGNALS = {
     'interest rate', 'savings account', 'checking account',
     'bank transfer', 'wire transfer', 'forex', 'futures',
     'p/e ratio', 'market cap', 'earnings report', 'balance sheet',
+    'financial crisis', 'recession', 'inflation', 'central bank',
+    'exchange rate', 'bond yield', 'yen depreciation',
     '銀行', '証券', '投資', '株価', '資産', '口座', '決済',
-    '保険', '為替', 'クレジット', '暗号資産',
+    '保険', '為替', 'クレジット', '暗号資産', '円安', '円高',
+    '日銀', '金融危機', '景気後退', 'インフレ', '金利', '利上げ',
     '银行', '证券', '投资', '股票', '基金', '理财', '支付', '账单',
-    '保险', '汇率', '信用卡', '贷款', '收益率',
+    '保险', '汇率', '信用卡', '贷款', '收益率', '金融危机',
+    '日元贬值', '日元升值', '通胀', '央行', '加息', '降息', '债券',
   ],
   ai: [
     'large language model', 'llm inference', 'model card', 'transformers',
@@ -67,22 +72,32 @@ const CONTENT_SIGNALS = {
   shopping: [
     'add to cart', 'checkout', 'order tracking', 'shipping',
     'product review', 'sale price', 'coupon code', 'wishlist',
+    'microsoft rewards', 'bing rewards', 'reward points',
     'カートに入れる', '購入', '注文', '配送', 'レビュー',
-    '加入购物车', '购买', '订单', '物流', '评价', '优惠券',
+    'ポイント', '加入购物车', '购买', '订单', '物流', '评价', '优惠券', '积分',
   ],
   entertainment: [
     'watch now', 'streaming', 'episode', 'season', 'playlist',
-    'gameplay', 'trailer', 'subscribe', 'new release',
-    '視聴する', '配信', 'アニメ', 'ドラマ', 'プレイリスト',
-    '立即观看', '直播', '动漫', '综艺', '播放列表',
+    'gameplay', 'trailer', 'subscribe', 'new release', 'anime', 'manga',
+    '視聴する', '配信', 'アニメ', 'ドラマ', 'プレイリスト', '漫画',
+    '立即观看', '直播', '动漫', '综艺', '播放列表', '番剧', '漫画',
   ],
   reference: [
     'documentation', 'api reference', 'tutorial', 'getting started',
     'user guide', 'manual', 'textbook', 'course syllabus',
     'dictionary entry', 'vocabulary', 'translation', 'encyclopedia',
-    '学習', '教程', '文档', '百科', '辞典', '课程',
+    'language learning', 'coding practice', 'interview practice',
+    'api documentation', 'api docs', 'api home', 'developer api',
+    '学習', '教程', '文档', '百科', '辞典', '课程', '単語', '翻訳',
+    '语言学习', '德语助手', '词典', '词汇', '牛客网', '编程题', '面试题', '接口文档', 'api 主页',
   ],
 };
+
+const STRONG_CONTENT_SIGNALS = new Set([
+  'financial crisis', 'yen depreciation', '金融危机', '日元贬值',
+  '金融危機', '円安', '円高', 'api documentation', 'api docs', 'api home',
+  'developer api', 'api 主页', '德语助手', '牛客网', '动漫', 'アニメ', 'anime',
+]);
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -140,11 +155,23 @@ function matchKeywords(hostname, fullUrl) {
   return bestKey;
 }
 
+function matchSpecificPathPatterns(fullUrl) {
+  const patterns = [
+    { key: 'shopping', re: /^https?:\/\/(?:[^/]+\.)?(?:microsoft|bing)\.com\/.*\brewards?\b/ },
+    { key: 'reference', re: /^https?:\/\/[^/]+\/.*\b(?:api-docs|api-reference|docs\/api)\b/ },
+  ];
+
+  for (const { key, re } of patterns) {
+    if (re.test(fullUrl)) return key;
+  }
+  return null;
+}
+
 // ── Tier 3: Content signal analysis ──────────────────────────────────
 
 function matchContentSignals(title, description, text) {
   const haystack = `${title} ${description} ${text}`.toLowerCase();
-  if (haystack.length < 10) return null;
+  if (haystack.trim().length < 2) return null;
 
   let best = { key: null, score: 0 };
 
@@ -153,7 +180,7 @@ function matchContentSignals(title, description, text) {
     for (const word of words) {
       if (haystack.includes(word)) {
         // Multi-word phrases are stronger signals
-        score += word.includes(' ') ? 3 : 1;
+        score += word.includes(' ') || STRONG_CONTENT_SIGNALS.has(word) ? 3 : 1;
       }
     }
     if (score > best.score) best = { key, score };
@@ -173,12 +200,24 @@ export function categorizeURL(url) {
 
   let hostname = '';
   try {
-    hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    hostname = normalizeHostname(url);
   } catch {
     return defaultResult();
   }
 
   const fullUrl = url.toLowerCase();
+
+  // Very specific path patterns can override broad host rules such as
+  // microsoft.com -> work.
+  const pathKey = matchSpecificPathPatterns(fullUrl);
+  if (pathKey && CATEGORIES[pathKey]) {
+    return {
+      key: pathKey,
+      ...CATEGORIES[pathKey],
+      confidence: 0.9,
+      source: 'url-path',
+    };
+  }
 
   // Tier 1: DOMAIN_MAP (highest confidence)
   const domainKey = lookupDomainMap(hostname);

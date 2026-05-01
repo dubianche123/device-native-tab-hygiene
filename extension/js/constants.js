@@ -43,6 +43,7 @@ export const CATEGORIES = {
       'paypal', 'stripe', 'venmo', 'cashapp', 'robinhood',
       'fidelity', 'schwab', 'vanguard', 'etrade', 'coinbase',
       'binance', 'kraken', 'crypto', 'defi', 'webull',
+      'interactivebrokers.com', 'ibkr.com',
       'etrade', 'tdameritrade', 'ally.com', 'sofi.com',
       'mint.com', 'creditkarma', 'bankofamerica',
       'mufg.jp', 'smbc.co.jp', 'mizuhobank.co.jp', 'rakuten-sec.co.jp',
@@ -155,6 +156,7 @@ export const CATEGORIES = {
       'amazon.com', 'ebay.com', 'aliexpress', 'etsy.com',
       'walmart.com', 'target.com', 'bestbuy.com',
       'shopify', 'newegg.com', 'costco.com',
+      'rewards.bing.com', 'rewards.microsoft.com',
       'taobao.com', 'tmall.com', 'jd.com', 'pinduoduo.com',
       'rakuten.co.jp', 'mercari.com', 'mercari.jp',
       'yodobashi.com', 'zozo.jp', 'yahoo.co.jp/shopping',
@@ -174,6 +176,8 @@ export const CATEGORIES = {
       'bilibili.com', 'nicovideo.jp', 'niconico', 'abema.tv',
       'tver.jp', 'pixiv.net', 'douyin.com', 'kuaishou.com',
       'youku.com', 'iqiyi.com', 'acfun.cn', 'music.163.com',
+      'anime', 'anilist.co', 'myanimelist.net', 'bangumi.tv',
+      'mikanani.me', 'dmhy.org', 'agefans',
     ],
     maxAgeMs: 5 * 24 * 60 * 60 * 1000,   // 5 days
     priority: 25,
@@ -185,7 +189,7 @@ export const CATEGORIES = {
       'wikipedia.org', 'stackoverflow.com', 'stackexchange',
       'medium.com', 'dev.to', 'mdn.', 'developer.mozilla',
       'coursera.org', 'udemy.com', 'edx.org', 'khanacademy',
-      'duolingo.com', 'brilliant.org',
+      'duolingo.com', 'duolingguo', 'brilliant.org',
       'baike.baidu.com', 'zh.wikipedia.org',
       'ja.wikipedia.org', 'csdn.net', 'cnblogs.com', 'juejin.cn',
       'segmentfault.com', 'oschina.net', 'teratail.com',
@@ -194,6 +198,7 @@ export const CATEGORIES = {
       'sspai.com', 'zhihu.com', 'weread.qq.com', 'deepl.com',
       'lingq.com', 'tutorialsdojo.com', 'eikaiwa', 'skillbuilder',
       'learn.microsoft', 'developer.microsoft', 'azure.microsoft',
+      'godic.net', 'eudic.net', 'dict.youdao.com', 'nowcoder.com',
     ],
     maxAgeMs: 10 * 24 * 60 * 60 * 1000,  // 10 days
     priority: 50,
@@ -280,6 +285,8 @@ export const DOMAIN_MAP = Object.freeze({
   'finviz.com': 'finance',
   'tradingview.com': 'finance',
   'finviz': 'finance',
+  'interactivebrokers.com': 'finance',
+  'ibkr.com': 'finance',
 
   // ── AI Tools ──
   'chatgpt.com': 'ai',
@@ -487,6 +494,8 @@ export const DOMAIN_MAP = Object.freeze({
   'zozo.jp': 'shopping',
   'shopping.yahoo.co.jp': 'shopping',
   'kakaku.com': 'shopping',
+  'rewards.bing.com': 'shopping',
+  'rewards.microsoft.com': 'shopping',
 
   // ── Entertainment ──
   'youtube.com': 'entertainment',
@@ -510,6 +519,11 @@ export const DOMAIN_MAP = Object.freeze({
   'iqiyi.com': 'entertainment',
   'acfun.cn': 'entertainment',
   'music.163.com': 'entertainment',
+  'anilist.co': 'entertainment',
+  'myanimelist.net': 'entertainment',
+  'bangumi.tv': 'entertainment',
+  'mikanani.me': 'entertainment',
+  'dmhy.org': 'entertainment',
 
   // ── Reference & Learning ──
   'wikipedia.org': 'reference',
@@ -524,6 +538,10 @@ export const DOMAIN_MAP = Object.freeze({
   'khanacademy.org': 'reference',
   'duolingo.com': 'reference',
   'brilliant.org': 'reference',
+  'godic.net': 'reference',
+  'eudic.net': 'reference',
+  'dict.youdao.com': 'reference',
+  'nowcoder.com': 'reference',
   'dictionary.cambridge.org': 'reference',
   'merriam-webster.com': 'reference',
   'dictionary.com': 'reference',
@@ -602,6 +620,7 @@ export const STORAGE_KEYS = {
   CLOSED_LOG: 'closedLog',             // [{ url, title, category, closedAt, reason }]
   IDLE_PREDICTIONS: 'idlePredictions', // { [dayOfWeek]: { startHour, endHour, confidence } }
   USER_SETTINGS: 'userSettings',       // { enabled, customThresholds, ... }
+  DOMAIN_CATEGORY_MEMORY: 'domainCategoryMemory', // { [rootDomain]: { counts, samples, ... } }
   ACTIVE_SESSION: 'activeSession',      // { tabId, windowId, startedAt, url }
   RETURN_NOTIFICATION: 'returnNotification', // { pending: bool, closedTabs: [...] }
   COMPANION_STATUS: 'companionStatus', // { connected, lastSync, modelVersion }

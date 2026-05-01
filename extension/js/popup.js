@@ -11,6 +11,7 @@
 import { APP_NAME, CATEGORIES, DEFAULT_CATEGORY, HARDWARE_MARKER_STATES } from './constants.js';
 import { getUpcomingHolidays, getRestDayLevel, getHolidayName, getExtendedPeriodLabel } from './holidays.js';
 import { normalizeIdleSchedule } from './idle-schedule.js';
+import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -140,10 +141,24 @@ function importanceMultiplierFor(entry, backgroundAgeMs) {
     + normalizedImportance * (IMPORTANCE_MULTIPLIER_MAX - IMPORTANCE_MULTIPLIER_MIN);
 }
 
+function shouldUseRootDomainThreshold(entry) {
+  const confidence = Number(entry?.categoryConfidence || 0);
+  const source = entry?.categorySource || '';
+  return (entry?.category || 'other') === 'other'
+    || source === 'domain-memory'
+    || confidence < 0.7;
+}
+
 function modelMaxAgeFor(entry, backgroundAgeMs, learnedThresholds = {}) {
   const categoryKey = entry.category || 'other';
   const cat = CATEGORIES[categoryKey] || DEFAULT_CATEGORY;
-  const learnedThreshold = learnedThresholds[categoryKey];
+  const rootDomain = entry.rootDomain || getRootDomain(entry.url || '');
+  const domainThreshold = shouldUseRootDomainThreshold(entry) && allowsRootDomainLearning(rootDomain)
+    ? learnedThresholds.__domains?.[rootDomain]
+    : null;
+  const learnedThreshold = typeof domainThreshold === 'number' && domainThreshold > 0
+    ? domainThreshold
+    : learnedThresholds[categoryKey];
   if (typeof learnedThreshold === 'number' && learnedThreshold > 0) {
     const defaultThreshold = cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
     return clamp(
@@ -180,7 +195,16 @@ function categoryClosureTiming(categoryKey, registry = {}, learnedThresholds = {
   const defaultTime = cat.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
   const capTime = closureLimitFor(categoryKey, settings);
   const learnedThreshold = learnedThresholds[categoryKey];
-  const hasLearned = typeof learnedThreshold === 'number' && learnedThreshold > 0;
+  const hasCategoryLearned = typeof learnedThreshold === 'number' && learnedThreshold > 0;
+  const hasDomainLearned = Object.values(registry).some(entry => {
+    if ((entry.category || 'other') !== categoryKey) return false;
+    const rootDomain = entry.rootDomain || getRootDomain(entry.url || '');
+    const domainThreshold = shouldUseRootDomainThreshold(entry) && allowsRootDomainLearning(rootDomain)
+      ? learnedThresholds.__domains?.[rootDomain]
+      : null;
+    return typeof domainThreshold === 'number' && domainThreshold > 0;
+  });
+  const hasLearned = hasCategoryLearned || hasDomainLearned;
 
   if (!hasLearned) {
     const modelTime = defaultTime;
@@ -202,7 +226,7 @@ function categoryClosureTiming(categoryKey, registry = {}, learnedThresholds = {
 
   if (values.length === 0) {
     const modelTime = clamp(
-      learnedThreshold,
+      hasCategoryLearned ? learnedThreshold : defaultTime,
       MIN_EFFECTIVE_THRESHOLD_MS,
       Math.max(MIN_EFFECTIVE_THRESHOLD_MS, defaultTime * 2),
     );
@@ -1041,14 +1065,41 @@ async function loadClosureLearning() {
         </div>`;
     }).join('');
 
+  const domainRows = Object.entries(summary.domainStats || {})
+    .filter(([, s]) => s.totalSamples > 0)
+    .sort((a, b) => b[1].totalSamples - a[1].totalSamples)
+    .slice(0, 8)
+    .map(([rootDomain, s]) => {
+      const catInfo = CATEGORIES[s.category] || DEFAULT_CATEGORY;
+      const hasRecommendation = s.recommendedThresholdMs != null;
+      const recStr = hasRecommendation
+        ? `Learned ${formatAge(s.recommendedThresholdMs)}`
+        : `<span class="cl-need-more">Need ${Math.max(0, 3 - (s.recommendationSampleCount || 0))} manual</span>`;
+      return `
+        <div class="cl-card cl-card--domain">
+          <div class="cl-card__header">
+            <span class="cl-card__cat" style="color:${catInfo.color || DEFAULT_CATEGORY.color}">${escapeHTML(rootDomain)}</span>
+            <span class="cl-card__counts">${escapeHTML(catInfo.label || s.category)} · ${s.manualCount} manual · ${s.autoCount} auto</span>
+            <span class="cl-card__rec">${recStr}</span>
+          </div>
+          <div class="cl-card__detail">
+            <span title="Median foreground dwell">Foreground ${formatAge(s.manualDwellMs)}</span>
+            <span title="Median background age after leaving foreground">Background ${formatAge(s.manualBackgroundAgeMs)}</span>
+            <span title="Domain fallback learning keeps broad Other pages from sharing one close-time bucket.">Root-domain fallback</span>
+          </div>
+        </div>`;
+    }).join('');
+
   container.innerHTML = `
     <div class="cl-summary">
       <span>Close samples: ${summary.totalSamples}</span>
       <span>Manual: ${summary.manualCount}</span>
       <span>Auto context: ${summary.autoCount}</span>
       <span>Learned categories: ${summary.categoriesWithRecommendations}/${summary.categoriesTracked}</span>
+      <span>Learned domains: ${summary.domainsWithRecommendations || 0}/${summary.domainsTracked || 0}</span>
     </div>
-    <div class="cl-table">${rows}</div>`;
+    <div class="cl-table">${rows}</div>
+    ${domainRows ? `<h4 class="cl-subtitle">Root-domain fallback</h4><div class="cl-table">${domainRows}</div>` : ''}`;
 }
 
 // ── Settings ─────────────────────────────────────────────────────────
