@@ -9,7 +9,7 @@
  */
 
 import { APP_NAME, CATEGORIES, DEFAULT_CATEGORY, HARDWARE_MARKER_STATES } from './constants.js';
-import { getUpcomingHolidays, getRestDayLevel } from './holidays.js';
+import { getUpcomingHolidays, getRestDayLevel, getHolidayName } from './holidays.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -48,6 +48,17 @@ function formatDays(value) {
 function formatClock(hour, minute) {
   if (typeof hour !== 'number') return '';
   return `${String(hour).padStart(2, '0')}:${String(minute || 0).padStart(2, '0')}`;
+}
+
+function shortCPUModel(model) {
+  const clean = String(model || 'CPU')
+    .replace(/\(R\)|\(TM\)/g, '')
+    .replace(/\s+CPU.*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const apple = clean.match(/Apple M\d+(?:\s(?:Pro|Max|Ultra))?/i);
+  if (apple) return apple[0];
+  return clean.split(' ').slice(0, 3).join(' ') || 'CPU';
 }
 
 function getCategoryInfo(key) {
@@ -159,6 +170,20 @@ function acceleratorLabel(status = {}) {
   return 'CPU Heuristic';
 }
 
+function decisionText(status = {}, confidence = 0) {
+  const formatted = formatPercent(confidence);
+  if (status.runtime === 'coreml') {
+    return `${acceleratorLabel(status)} Predicts Idle Confidence: ${formatted}`;
+  }
+  if (status.runtime === 'lookup') {
+    return `CPU Lookup Estimates Idle Likelihood: ${formatted}`;
+  }
+  if (status.runtime === 'disabled') {
+    return 'ML Off: no idle estimate';
+  }
+  return `CPU Heuristic Idle Estimate: ${formatted}`;
+}
+
 function retrainRuntimeLabel(status = {}) {
   const runtime = status.lastRetrainRuntime || status.runtimeLabel || 'local model';
   const devices = telemetryDevices(status);
@@ -267,7 +292,7 @@ function renderMLConsole(status = {}) {
   const confidence = typeof status.currentIdleConfidence === 'number'
     ? status.currentIdleConfidence
     : 0;
-  decision.textContent = `${acceleratorLabel(status)} Predicts Idle Confidence: ${formatPercent(confidence)}`;
+  decision.textContent = decisionText(status, confidence);
   decision.title = status.readinessReason || '';
   renderConfidenceCurve(status.confidenceCurve || []);
 
@@ -534,8 +559,9 @@ async function loadPredictions() {
     const target = new Date(now.getTime() + dayOffset * 86_400_000);
     const restLevel = getRestDayLevel(target, calendar);
 
+    const hName = getHolidayName(target, calendar);
     const badge = restLevel === 2
-      ? '<span class="prediction-card__badge prediction-card__badge--holiday">🎌 Holiday</span>'
+      ? `<span class="prediction-card__badge prediction-card__badge--holiday" title="${escapeHTML(hName || 'Holiday')}">🎌 ${escapeHTML(hName || 'Holiday')}</span>`
       : restLevel === 1
         ? '<span class="prediction-card__badge prediction-card__badge--weekend">☀ Weekend</span>'
         : '';
@@ -727,25 +753,73 @@ let memoryTimer = null;
 
 async function updateMemoryPressure() {
   const mem = await sendMessage({ type: 'getMemoryPressure' });
-  if (!mem) return;
-
   const fill = document.getElementById('memory-fill');
   const value = document.getElementById('memory-value');
   if (!fill || !value) return;
 
+  if (!mem || mem.error) {
+    fill.style.width = '0%';
+    value.textContent = 'Err%';
+    value.title = mem?.error || 'Memory API unavailable. Try reloading the extension.';
+    return;
+  }
+
   const pct = mem.percent || 0;
   fill.style.width = `${pct}%`;
   value.textContent = `${pct}%`;
+  value.title = `Used: ${Math.round(mem.usedCapacity / 1024 / 1024 / 1024 * 10) / 10}GB / Total: ${Math.round(mem.capacity / 1024 / 1024 / 1024 * 10) / 10}GB`;
 
   // Color coding: green < 60, yellow < 80, red >= 80
   if (pct >= 80) {
-    fill.style.background = '#e74c3c';
-    value.style.color = '#e74c3c';
+    fill.style.background = 'var(--danger)';
+    value.style.color = 'var(--danger)';
   } else if (pct >= 60) {
-    fill.style.background = '#f1c40f';
-    value.style.color = '#f1c40f';
+    fill.style.background = 'var(--warning)';
+    value.style.color = 'var(--warning)';
   } else {
     fill.style.background = 'var(--accent)';
+    value.style.color = 'var(--text-muted)';
+  }
+}
+
+// ── CPU Usage ────────────────────────────────────────────────────────
+
+async function updateCPUUsage() {
+  const cpu = await sendMessage({ type: 'getCPUUsage' });
+  const fill = document.getElementById('cpu-fill');
+  const value = document.getElementById('cpu-value');
+  const detail = document.getElementById('cpu-detail');
+  if (!fill || !value) return;
+
+  if (!cpu || cpu.error) {
+    fill.style.width = '0%';
+    value.textContent = 'Err%';
+    if (detail) {
+      detail.textContent = 'API';
+      detail.title = 'CPU API unavailable';
+    }
+    return;
+  }
+
+  const pct = cpu.percent || 0;
+  const model = shortCPUModel(cpu.model);
+  const threads = cpu.threads ? `${cpu.threads}T` : '--T';
+  fill.style.width = `${pct}%`;
+  value.textContent = `${pct}%`;
+  value.title = `${cpu.model || 'CPU'} (${cpu.threads || 0} threads)`;
+  if (detail) {
+    detail.textContent = `${model} ${threads}`;
+    detail.title = value.title;
+  }
+
+  if (pct >= 80) {
+    fill.style.background = 'var(--danger)';
+    value.style.color = 'var(--danger)';
+  } else if (pct >= 50) {
+    fill.style.background = 'var(--warning)';
+    value.style.color = 'var(--warning)';
+  } else {
+    fill.style.background = 'var(--success)';
     value.style.color = 'var(--text-muted)';
   }
 }
@@ -835,13 +909,17 @@ async function init() {
   await loadClosedLog();
   await loadPredictions();
   await updateMemoryPressure();
+  await updateCPUUsage();
   await updateAISuggestions();
 
   if (!mlStatusTimer) {
     mlStatusTimer = setInterval(updateMLStatus, 5_000);
   }
   if (!memoryTimer) {
-    memoryTimer = setInterval(updateMemoryPressure, 10_000);
+    memoryTimer = setInterval(() => {
+      updateMemoryPressure();
+      updateCPUUsage();
+    }, 5_000);
   }
 }
 

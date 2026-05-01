@@ -11,7 +11,8 @@
     "nativeMessaging",
     "idle",
     "sessions",
-    "system.memory"
+    "system.memory",
+    "system.cpu"
   ],
   "background": {
     "service_worker": "js/background.js",

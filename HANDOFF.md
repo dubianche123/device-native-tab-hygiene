@@ -31,7 +31,7 @@ Common metadata sent by JS and returned by Swift:
 JS request types:
 
 - `activity`: records local activity for training.
-- `predict`: returns `idlePredictions` plus nested `health`.
+- `predict`: returns `idlePredictions` plus nested `health`. JS sends both `holidayLevel` for "now" and `holidayLevels` keyed by day-of-week for the next 7 calendar dates.
 - `health`: returns current model/runtime/hardware telemetry.
 - `retrain`: forces local Create ML retraining.
 - `classifyURL`: returns local NLP category classification.
@@ -139,19 +139,22 @@ Key rule: URL path substrings are **never** matched against category keywords. T
 **Data**: 2025–2027 holiday lists — Japan (国民の祝日 + GW/Obon/年末年始/Silver Week extended ranges), China (法定假日 + Spring Festival/National Day extended periods).
 
 **API**:
-- `getRestDayLevel(date, calendar)` → `'holiday'` | `'weekend'` | `'weekday'`
-- `getUpcomingHolidays(calendar, count)` → next N holidays with `{name, start, end}`
+- `getRestDayLevel(date, calendar)` → `0` normal weekday, `1` weekend, `2` public holiday or extended holiday period
+- `getHolidayName(date, calendar)` → public holiday name or `null`
+- `getUpcomingHolidays(calendar, daysAhead)` → holidays in the next N days with `{date, name, dayOfWeek}`
 - `isHoliday(date, calendar)` → boolean
-- `CALENDAR_OPTIONS` → `[{value, label}]` for UI dropdown
+- `CALENDAR_OPTIONS` → registry for UI dropdown labels/icons
 
-**Fallback heuristic tiers** (in `idle-detector.js`):
+**Fallback heuristic tiers** (in `idle-detector.js` and Swift companion):
 | Tier | Window | Confidence |
 |------|--------|------------|
-| Holiday | 00:00–09:00 | 0.60 |
-| Weekend | 00:00–08:00 | 0.55 |
-| Weekday | 01:00–07:00 | 0.75 |
+| Holiday | 00:00–09:00 | 0.62 estimate |
+| Weekend | 00:00–08:00 | 0.57 estimate |
+| Weekday | 01:00–07:00 | 0.56 estimate |
 
 Setting: `holidayCalendar` — `'none'` (default), `'japan'`, or `'china'`.
+
+Important IPC detail: `extension/js/idle-detector.js` builds `holidayLevels` for the next seven actual dates before sending `predict`. Swift's `IdlePredictor.predict(holidayLevel:holidayLevels:)` applies the matching value per day, so a Monday Japanese/Chinese holiday can change that Monday's prediction even when today is not a holiday.
 
 ## Test / Deploy Mode
 
@@ -165,14 +168,15 @@ Setting: `testMode` (boolean, default `false`).
 
 ## Memory Pressure & AI Cleanup
 
-**Memory bar** (popup header): Polls `chrome.system.memory.getInfo()` every 10s. Shows `used/total GB` and percentage bar. Color: green (<60%), orange (60–80%), red (≥80%).
+**Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a compact model/thread label such as `Apple M3 8T`. Color: green (<60%), orange (60–80%), red (≥80%).
 
 **AI Cleanup button** (🤖, popup header): Sends `aiCleanup` message to background. Scoring:
 ```
-score = (100 - categoryPriority) × (idleHours / 24) × (1 / log₂(interactions + 1))
+score = categoryPriority + log₂(interactions + 1) × 8 - min(72, idleHours) × 1.2
 ```
-- NSFW categories get score 0 (always closed first).
-- Higher score = more likely to be closed.
+- NSFW categories get score -1000 (always closed first).
+- Lower score = more likely to be closed.
+- High-priority categories such as AI/work are protected; long idle time lowers the score; interactions raise it.
 - Re-checks memory every 5 closures; stops if pressure < target.
 
 **Settings**:
@@ -217,4 +221,4 @@ All 7 JS files pass `node --check`. CSS braces balanced (139/139). Manifest JSON
 - `chrome.system.memory` permission added to manifest for memory pressure monitoring.
 - DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.
 - URL paths are never matched against category keywords — this is intentional to prevent false positives.
-- Finalized (2026-05-01): IPC logic is perfectly synced for protocol version 2, hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is robustly handled using fallback browser heuristics. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are all implemented and syntax-verified.
+- Finalized (2026-05-01): IPC logic is synced for protocol version 2, including per-day `holidayLevels` for prediction requests. Hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is handled with clearly labeled browser heuristic estimates. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are implemented and syntax-verified.

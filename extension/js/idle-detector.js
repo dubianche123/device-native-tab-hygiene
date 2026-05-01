@@ -23,6 +23,21 @@ import { getRestDayLevel } from './holidays.js';
 let nativePort = null;
 let companionQueue = Promise.resolve();
 
+function dateAfterDays(baseDate, dayOffset) {
+  const target = new Date(baseDate);
+  target.setDate(baseDate.getDate() + dayOffset);
+  return target;
+}
+
+function buildHolidayLevels(calendar, baseDate = new Date()) {
+  const levels = {};
+  for (let offset = 0; offset < 7; offset++) {
+    const target = dateAfterDays(baseDate, offset);
+    levels[String(target.getDay())] = getRestDayLevel(target, calendar);
+  }
+  return levels;
+}
+
 // ── Native Messaging helpers ──────────────────────────────────────────
 
 export function connectToCompanion() {
@@ -180,8 +195,10 @@ export async function requestPredictions() {
   try {
     const settings = await getSettings();
     const calendar = settings.holidayCalendar || 'none';
-    const holidayLevel = getRestDayLevel(new Date(), calendar);
-    const response = await sendToCompanion({ type: 'predict', holidayLevel });
+    const now = new Date();
+    const holidayLevel = getRestDayLevel(now, calendar);
+    const holidayLevels = buildHolidayLevels(calendar, now);
+    const response = await sendToCompanion({ type: 'predict', holidayLevel, holidayLevels });
     if (response?.predictions) {
       await setIdlePredictions(response.predictions);
       if (response.modelMode) {
@@ -284,7 +301,7 @@ async function getFallbackPredictions() {
   for (let d = 0; d < 7; d++) {
     const now = new Date();
     const dayOffset = (d - now.getDay() + 7) % 7;
-    const target = new Date(now.getTime() + dayOffset * 86_400_000);
+    const target = dateAfterDays(now, dayOffset);
     const restLevel = getRestDayLevel(target, calendar);
 
     if (restLevel === 2) {
@@ -353,14 +370,14 @@ async function disconnectedStatus(error = null) {
     modelMode: 'fallback',
     modelLoaded: false,
     runtime: 'heuristic',
-    runtimeLabel: 'Heuristic',
+    runtimeLabel: 'Heuristic Estimate',
     computeUnits: 'cpu',
     trainingSamples: 0,
     targetTrainingSamples: 1000,
     minimumTrainingSamples: 100,
     modelMaturity: 0,
     modelAccuracy: null,
-    readinessReason: 'Native link offline; NPU telemetry unavailable, using browser CPU heuristic',
+    readinessReason: 'Native link offline; showing a browser CPU heuristic estimate while NPU telemetry is unavailable',
     currentIdleConfidence: await fallbackConfidenceNow(),
     confidenceCurve: await fallbackConfidenceCurve(),
     decisionThreshold: 0.55,
@@ -393,15 +410,13 @@ async function fallbackConfidenceNow() {
   const restLevel = getRestDayLevel(now, calendar);
 
   if (restLevel === 2) {
-    // Holiday: 00:00–09:00 → 0.60, otherwise 0.30
-    return hour < 9 ? 0.60 : 0.30;
+    // Holiday estimates are deliberately conservative until local training exists.
+    return hour < 9 ? 0.62 : 0.28;
   }
   if (restLevel === 1) {
-    // Weekend: 00:00–08:00 → 0.55, otherwise 0.25
-    return hour < 8 ? 0.55 : 0.25;
+    return hour < 8 ? 0.57 : 0.23;
   }
-  // Weekday
-  return hour >= 1 && hour < 7 ? 0.75 : 0.20;
+  return hour >= 1 && hour < 7 ? 0.56 : 0.18;
 }
 
 async function fallbackConfidenceCurve() {
@@ -417,11 +432,11 @@ async function fallbackConfidenceCurve() {
 
     let confidence;
     if (restLevel === 2) {
-      confidence = hourValue < 9 ? 0.60 : 0.30;
+      confidence = hourValue < 9 ? 0.62 : 0.28;
     } else if (restLevel === 1) {
-      confidence = hourValue < 8 ? 0.55 : 0.25;
+      confidence = hourValue < 8 ? 0.57 : 0.23;
     } else {
-      confidence = hourValue >= 1 && hourValue < 7 ? 0.75 : 0.20;
+      confidence = hourValue >= 1 && hourValue < 7 ? 0.56 : 0.18;
     }
 
     return {

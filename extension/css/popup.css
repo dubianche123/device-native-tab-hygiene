@@ -15,6 +15,7 @@
   --warning: #fdcb6e;
   --danger: #e74c3c;
   --border: #2d3a5e;
+  --surface: #111a32;
   --radius: 8px;
   --shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
@@ -219,12 +220,16 @@ body {
   min-width: 0;
 }
 
+.memory-bar--cpu {
+  flex: 1.15;
+}
+
 .memory-bar__label {
   font-size: 10px;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   flex-shrink: 0;
 }
 
@@ -250,6 +255,17 @@ body {
   color: var(--text-muted);
   min-width: 32px;
   text-align: right;
+  flex-shrink: 0;
+}
+
+.memory-bar__detail {
+  max-width: 58px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 
@@ -362,7 +378,7 @@ body {
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   margin-bottom: 6px;
 }
 
@@ -611,7 +627,7 @@ body {
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   margin-bottom: 8px;
   display: flex;
   justify-content: space-between;
@@ -659,7 +675,7 @@ body {
   background: rgba(231, 76, 60, 0.15);
   color: #e74c3c;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -713,7 +729,7 @@ body {
   border-radius: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
 }
 
 .tab-item__age {
@@ -796,7 +812,7 @@ body {
   padding: 1px 6px;
   border-radius: 8px;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
 }
 
 .prediction-card__badge--holiday {
@@ -820,7 +836,7 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   margin-bottom: 6px;
 }
 
@@ -877,7 +893,7 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   margin-bottom: 6px;
 }
 

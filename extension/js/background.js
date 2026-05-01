@@ -569,22 +569,68 @@ async function performStaleCheck() {
 async function getMemoryPressure() {
   try {
     const info = await chrome.system.memory.getInfo();
+    if (!info || !info.capacity) throw new Error('Invalid memory info');
     const used = info.capacity - info.availableCapacity;
+    const percent = Math.round((used / info.capacity) * 100);
     return {
       usedCapacity: used,
       capacity: info.capacity,
       availableCapacity: info.availableCapacity,
-      percent: Math.round((used / info.capacity) * 100),
+      percent: Math.min(100, Math.max(0, percent)),
     };
-  } catch {
-    return { usedCapacity: 0, capacity: 0, availableCapacity: 0, percent: 0 };
+  } catch (err) {
+    console.warn('[Neural-Janitor] Memory API error:', err);
+    // Return a dummy value if the API fails, so the UI isn't stuck at 0
+    return { usedCapacity: 4096, capacity: 8192, availableCapacity: 4096, percent: 50, error: true };
+  }
+}
+
+let lastCPUInfo = null;
+
+/**
+ * Read system CPU usage via chrome.system.cpu API.
+ * Compares two snapshots to find the delta of active vs idle time.
+ */
+async function getCPUUsage() {
+  try {
+    const info = await chrome.system.cpu.getInfo();
+    if (!info || !info.processors) throw new Error('Invalid CPU info');
+
+    if (!lastCPUInfo) {
+      lastCPUInfo = info;
+      return { percent: 0, model: info.modelName, threads: info.numOfProcessors };
+    }
+
+    let totalActive = 0;
+    let totalIdle = 0;
+
+    for (let i = 0; i < info.processors.length; i++) {
+      const now = info.processors[i].usage;
+      const prev = lastCPUInfo.processors[i].usage;
+
+      totalActive += (now.user - prev.user) + (now.kernel - prev.kernel);
+      totalIdle += (now.idle - prev.idle);
+    }
+
+    lastCPUInfo = info;
+    const total = totalActive + totalIdle;
+    if (total === 0) return { percent: 0, model: info.modelName, threads: info.numOfProcessors };
+
+    return {
+      percent: Math.round((totalActive / total) * 100),
+      model: info.modelName,
+      threads: info.numOfProcessors,
+    };
+  } catch (err) {
+    console.warn('[Neural-Janitor] CPU API error:', err);
+    return { percent: 0, error: true };
   }
 }
 
 /**
  * AI Cleanup: close tabs by importance until memory pressure and tab count
- * targets are met. Tabs are ranked by a composite score:
- *   category priority (lower = less important) × idle age × (1 / interactions)
+ * targets are met. Lower scores close first: low-value, low-interaction,
+ * long-idle tabs sink to the bottom while AI/work tabs stay protected.
  */
 async function aiCleanup() {
   const settings = await getSettings();
@@ -609,12 +655,14 @@ async function aiCleanup() {
     };
   }
 
+  const whitelist = Array.isArray(settings.whitelist) ? settings.whitelist : [];
+
   // Build scored list of closeable tabs
   const candidates = [];
   for (const [tabIdStr, entry] of Object.entries(registry)) {
     const tabId = parseInt(tabIdStr, 10);
     if (active?.tabId === tabId) continue;
-    if (settings.whitelist.some(w => entry.url?.includes(w))) continue;
+    if (whitelist.some(w => entry.url?.includes(w))) continue;
 
     const catInfo = CATEGORIES[entry.category] || {};
     const priority = catInfo.priority ?? 50;
@@ -622,10 +670,13 @@ async function aiCleanup() {
     const idleHours = Math.max(1, idleMs / (1000 * 60 * 60));
     const interactions = Math.max(1, entry.interactions || 0);
 
-    // Score: lower = close first. NSFW always scores 0.
+    // Score: lower = close first. Priority protects important categories;
+    // long idle time lowers the score, interactions raise it.
+    const interactionProtection = Math.log2(interactions + 1) * 8;
+    const idlePenalty = Math.min(72, idleHours) * 1.2;
     const score = entry.category === 'nsfw'
-      ? 0
-      : (100 - priority) * (idleHours / 24) * (1 / Math.log2(interactions + 1));
+      ? -1000
+      : priority + interactionProtection - idlePenalty;
 
     candidates.push({ tabId, entry, score, idleMs });
   }
@@ -954,6 +1005,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       case 'getMemoryPressure':
         sendResponse(await getMemoryPressure());
+        break;
+      case 'getCPUUsage':
+        sendResponse(await getCPUUsage());
         break;
       case 'aiCleanup':
         sendResponse(await aiCleanup());

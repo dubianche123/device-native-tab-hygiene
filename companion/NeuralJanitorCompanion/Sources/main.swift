@@ -223,7 +223,7 @@ final class IdlePredictor {
         return "fallback"
     }
 
-    func predict(holidayLevel: Int = 0) -> [IdlePrediction] {
+    func predict(holidayLevel: Int = 0, holidayLevels: [Int: Int] = [:]) -> [IdlePrediction] {
         maybeTrainIfNeeded()
         lastInferenceAt = Date()
         inferenceCount += 1
@@ -231,10 +231,11 @@ final class IdlePredictor {
         var predictions: [IdlePrediction] = []
         let eventsForPrediction = store.all()
         for day in 0..<7 {
+            let dayHolidayLevel = holidayLevels[day] ?? holidayLevel
             var samples: [(hour: Double, prob: Double)] = []
             for hour in 0..<24 {
                 for minute in stride(from: 0, to: 60, by: 15) {
-                    let prob = probability(day: day, hour: hour, minute: minute, events: eventsForPrediction, holidayLevel: holidayLevel)
+                    let prob = probability(day: day, hour: hour, minute: minute, events: eventsForPrediction, holidayLevel: dayHolidayLevel)
                     samples.append((Double(hour) + Double(minute) / 60.0, prob))
                 }
             }
@@ -250,8 +251,8 @@ final class IdlePredictor {
             } else {
                 // If no contiguous block above threshold, check the heuristic
                 // Use a default window for the day based on heuristic
-                let hStart = holidayLevel >= 2 ? 0.0 : (holidayLevel >= 1 ? 0.0 : 1.0)
-                let hEnd = holidayLevel >= 2 ? 9.0 : (holidayLevel >= 1 ? 8.0 : 7.0)
+                let hStart = dayHolidayLevel >= 2 ? 0.0 : (dayHolidayLevel >= 1 ? 0.0 : 1.0)
+                let hEnd = dayHolidayLevel >= 2 ? 9.0 : (dayHolidayLevel >= 1 ? 8.0 : 7.0)
                 predictions.append(IdlePrediction(day: day, startHour: hStart, endHour: hEnd, confidence: 0.25))
             }
         }
@@ -298,6 +299,12 @@ final class IdlePredictor {
         let maturity = min(1.0, Double(matureSamples) / 1_000.0)
         let devices = localDeviceStatus(usingCoreML: usingCoreML)
         let markerStates = hardwareMarkerStates(from: devices)
+        let modelAccuracyValue: Any
+        if model != nil || !lookup.isEmpty, let modelAccuracy = metrics.modelAccuracy {
+            modelAccuracyValue = modelAccuracy
+        } else {
+            modelAccuracyValue = NSNull()
+        }
         let runtimeNote = usingCoreML
             ? "Core ML selects the exact ANE/GPU/CPU target internally; public APIs expose availability and requested compute units, not the per-inference processor."
             : "Core ML model is not loaded yet, so predictions use a local CPU fallback while more browser activity is collected and retraining continues."
@@ -317,7 +324,7 @@ final class IdlePredictor {
             "targetTrainingSamples": 1_000,
             "minimumTrainingSamples": 100,
             "modelMaturity": maturity,
-            "modelAccuracy": (model != nil || !lookup.isEmpty) ? (metrics.modelAccuracy ?? NSNull()) : NSNull(),
+            "modelAccuracy": modelAccuracyValue,
             "readinessReason": readinessReason(activityCount: activityCount),
             "currentIdleConfidence": decision["currentIdleConfidence"] ?? 0.0,
             "confidenceCurve": decision["confidenceCurve"] ?? [],
@@ -440,22 +447,38 @@ final class IdlePredictor {
     }
 
     private func probability(day: Int, hour: Int, minute: Int, events: [ActivityEvent], holidayLevel: Int = 0) -> Double {
+        let base: Double
         if let model = model {
-            return runInference(model: model, features: TrainingSample(timestamp: 0, hour: hour, minute: minute, dayOfWeek: day, label: ""))
+            base = runInference(model: model, features: predictionFeatures(day: day, hour: hour, minute: minute, events: events))
+            return restAdjustedProbability(base, hour: hour, minute: minute, holidayLevel: holidayLevel)
         }
         
         if let prob = lookup["\(day)_\(hour)"] {
-            return prob
+            base = prob
+            return restAdjustedProbability(base, hour: hour, minute: minute, holidayLevel: holidayLevel)
         }
         
+        return heuristicProbability(hour: hour, minute: minute, holidayLevel: holidayLevel)
+    }
+
+    private func heuristicProbability(hour: Int, minute: Int, holidayLevel: Int = 0) -> Double {
         let h = Double(hour) + Double(minute) / 60.0
         if holidayLevel >= 2 {
-            return h < 9.0 ? 0.60 : 0.30
+            return h < 9.0 ? 0.62 : 0.28
         } else if holidayLevel >= 1 {
-            return h < 8.0 ? 0.55 : 0.25
+            return h < 8.0 ? 0.57 : 0.23
         } else {
-            return (hour >= 1 && hour < 7) ? 0.75 : 0.20
+            return (hour >= 1 && hour < 7) ? 0.56 : 0.18
         }
+    }
+
+    private func restAdjustedProbability(_ base: Double, hour: Int, minute: Int, holidayLevel: Int = 0) -> Double {
+        guard holidayLevel > 0 else { return clamp(base) }
+        let h = Double(hour) + Double(minute) / 60.0
+        if holidayLevel >= 2 {
+            return clamp(base + (h < 9.0 ? 0.08 : -0.02))
+        }
+        return clamp(base + (h < 8.0 ? 0.04 : -0.01))
     }
 
     private func decisionSnapshot(holidayLevel: Int = 0) -> [String: Any] {
@@ -541,7 +564,7 @@ final class IdlePredictor {
             } else if let prob = lookup["\(sample.dayOfWeek)_\(sample.hour)"] {
                 confidence = prob
             } else {
-                confidence = (sample.hour >= 1 && sample.hour < 7) ? 0.75 : 0.20
+                confidence = heuristicProbability(hour: sample.hour, minute: sample.minute)
             }
             let predicted = confidence >= 0.55 ? "idle" : "active"
             if predicted == sample.label { correct += 1 }
@@ -981,6 +1004,35 @@ func normalizeTimestamp(_ raw: Double) -> Double {
     raw > 10_000_000_000 ? raw / 1000.0 : raw
 }
 
+func intFromJSON(_ value: Any?) -> Int? {
+    if let intValue = value as? Int { return intValue }
+    if let numberValue = value as? NSNumber { return numberValue.intValue }
+    if let stringValue = value as? String { return Int(stringValue) }
+    return nil
+}
+
+func holidayLevelMap(from value: Any?) -> [Int: Int] {
+    if let dict = value as? [String: Any] {
+        var parsed: [Int: Int] = [:]
+        for (key, rawValue) in dict {
+            guard let day = Int(key), day >= 0, day <= 6, let level = intFromJSON(rawValue) else { continue }
+            parsed[day] = max(0, min(2, level))
+        }
+        return parsed
+    }
+
+    if let array = value as? [Any] {
+        var parsed: [Int: Int] = [:]
+        for (day, rawValue) in array.enumerated() where day < 7 {
+            guard let level = intFromJSON(rawValue) else { continue }
+            parsed[day] = max(0, min(2, level))
+        }
+        return parsed
+    }
+
+    return [:]
+}
+
 let store = ActivityStore()
 let predictor = IdlePredictor(store: store)
 let pageClassifier = LocalPageClassifier()
@@ -1026,8 +1078,9 @@ while true {
         ])
 
     case "predict":
-        let holidayLevel = (message["holidayLevel"] as? Int) ?? 0
-        let predictions = predictor.predict(holidayLevel: holidayLevel)
+        let holidayLevel = intFromJSON(message["holidayLevel"]) ?? 0
+        let holidayLevels = holidayLevelMap(from: message["holidayLevels"])
+        let predictions = predictor.predict(holidayLevel: holidayLevel, holidayLevels: holidayLevels)
         var predDict: [String: Any] = [:]
         for pred in predictions {
             predDict["\(pred.day)"] = [
@@ -1044,7 +1097,7 @@ while true {
             "predictions": predDict,
             "modelMode": predictor.mode,
             "activityCount": store.count,
-            "health": predictor.healthPayload(activityCount: store.count, holidayLevel: (message["holidayLevel"] as? Int) ?? 0),
+            "health": predictor.healthPayload(activityCount: store.count, holidayLevel: holidayLevel),
         ])
 
     case "retrain":
@@ -1070,7 +1123,7 @@ while true {
         }
 
     case "health":
-        let holidayLevel = (message["holidayLevel"] as? Int) ?? 0
+        let holidayLevel = intFromJSON(message["holidayLevel"]) ?? 0
         var payload = predictor.healthPayload(activityCount: store.count, holidayLevel: holidayLevel)
         payload["version"] = "1.0.0"
         writeMessage(payload)
