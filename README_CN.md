@@ -17,41 +17,54 @@ Neural-Janitor 是一款面向 Chrome / Edge 的标签页管理扩展，依托 A
 ## 运行时数据流（C4 容器视图）
 
 ```mermaid
-%%{init: {'theme': 'neutral', 'themeVariables': { 'primaryColor': '#3b82f6', 'edgeLabelBackground':'transparent' }}}%%
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#0052cc',
+    'primaryTextColor': '#fff',
+    'primaryBorderColor': '#0052cc',
+    'lineColor': '#888',
+    'secondaryColor': '#006100',
+    'tertiaryColor': '#fff',
+    'clusterBkg': 'rgba(255, 255, 255, 0.05)',
+    'clusterBorder': '#3b82f6',
+    'fontSize': '14px'
+  }
+}}%%
 flowchart TB
-  subgraph actors["外部角色与平台"]
+  subgraph actors["<span style='color:#3b82f6'>外部角色与平台</span>"]
     direction LR
     user(["👤 用户<br/>浏览行为"])
     chrome[["🧩 浏览器 API<br/>tabs · idle · storage · system"]]
   end
 
-  subgraph browser["容器：Chrome / Edge 扩展 (Manifest V3)"]
+  subgraph browser["<span style='color:#3b82f6'>容器：Chrome / Edge 扩展 (Manifest V3)</span>"]
     direction TB
-    subgraph popup["🖥️ 前端：弹窗 UI"]
+    subgraph popup["<span style='color:#3b82f6'>前端：弹窗 UI</span>"]
       p_ui["交互式仪表盘<br/>ML 控制台 · AI 建议"]
       p_telemetry["状态与遥测<br/>CPU / 内存 / 功耗信号"]
       p_log["已关闭标签日志<br/>恢复与记录"]
     end
 
-    subgraph background["⚙️ 后端：服务工作线程"]
+    subgraph background["<span style='color:#3b82f6'>后端：服务工作线程</span>"]
       b_tracker["📍 标签追踪器<br/>焦点 · 停留 · 交互"]
       b_learner["🎓 关闭学习器<br/>手动 vs 自动采样"]
       b_engine["🏷️ 类别引擎<br/>域名映射 · 记忆 · 信号"]
       b_orchestrator["🧹 清理调度器<br/>过期检查 · AI 清理 · 逻辑"]
     end
 
-    subgraph storage["💾 持久化：chrome.storage.local"]
+    subgraph storage["<span style='color:#f59e0b'>持久化：chrome.storage.local</span>"]
       s_registry[("实时注册表<br/>活跃标签页条目")]
       s_samples[("学习存储<br/>行为样本")]
       s_settings[("用户配置<br/>规则 · 白名单 · 黑名单")]
     end
   end
 
-  subgraph ipc["通信路径"]
+  subgraph ipc["<span style='color:#94a3b8'>通信路径</span>"]
     nativeBus["📬 Native Messaging (V2)<br/>JSON over stdio"]
   end
 
-  subgraph native["容器：macOS Swift 伴随程序"]
+  subgraph native["<span style='color:#10b981'>容器：macOS Swift 伴随程序</span>"]
     direction TB
     n_host["原生消息宿主<br/>事件多路复用"]
     n_classifier["🔤 NLP 分类器<br/>NaturalLanguage 框架"]
@@ -78,17 +91,11 @@ flowchart TB
   n_chronos <--> n_storage
   n_chronos <--> coreml
 
-  %% 样式：使用透明填充和中性色边框以适配暗色模式
-  style actors fill:none,stroke:#94a3b8,stroke-width:1px
-  style browser fill:none,stroke:#3b82f6,stroke-width:2px
-  style native fill:none,stroke:#10b981,stroke-width:2px
-  style popup fill:none,stroke:#3b82f6,stroke-dasharray: 5 5
-  style background fill:none,stroke:#3b82f6
-  style storage fill:none,stroke:#f59e0b
-  style ipc fill:none,stroke:#94a3b8,stroke-dasharray: 2 2
-
-  classDef actor fill:none,stroke:#b45309,stroke-width:1px
-  classDef platform fill:none,stroke:#64748b,stroke-width:1px
+  %% 全局节点样式
+  classDef default fill:#1e293b,stroke:#3b82f6,color:#fff,stroke-width:1px
+  classDef actor fill:#334155,stroke:#f59e0b,color:#fff,stroke-width:1px
+  classDef platform fill:#0f172a,stroke:#94a3b8,color:#fff,stroke-width:1px
+  
   class user actor
   class chrome,coreml platform
 ```

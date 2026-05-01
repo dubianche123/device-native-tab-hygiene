@@ -17,41 +17,54 @@ The core rule is simple:
 ## Runtime Dataflow (C4 Container View)
 
 ```mermaid
-%%{init: {'theme': 'neutral', 'themeVariables': { 'primaryColor': '#3b82f6', 'edgeLabelBackground':'transparent' }}}%%
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#0052cc',
+    'primaryTextColor': '#fff',
+    'primaryBorderColor': '#0052cc',
+    'lineColor': '#888',
+    'secondaryColor': '#006100',
+    'tertiaryColor': '#fff',
+    'clusterBkg': 'rgba(255, 255, 255, 0.05)',
+    'clusterBorder': '#3b82f6',
+    'fontSize': '14px'
+  }
+}}%%
 flowchart TB
-  subgraph actors["External Actors & Platforms"]
+  subgraph actors["<span style='color:#3b82f6'>External Actors & Platforms</span>"]
     direction LR
     user(["👤 User<br/>Browsing behavior"])
     chrome[["🧩 Browser APIs<br/>tabs · idle · storage · system"]]
   end
 
-  subgraph browser["Container: Chrome / Edge Extension (Manifest V3)"]
+  subgraph browser["<span style='color:#3b82f6'>Container: Chrome / Edge Extension (Manifest V3)</span>"]
     direction TB
-    subgraph popup["🖥️ Frontend: Popup UI"]
+    subgraph popup["<span style='color:#3b82f6'>Frontend: Popup UI</span>"]
       p_ui["Interactive Dashboard<br/>ML Console · AI Suggestions"]
       p_telemetry["Status & Telemetry<br/>CPU / MEM / Power signals"]
       p_log["Closed Tab Log<br/>Recovery & restore"]
     end
 
-    subgraph background["⚙️ Backend: Service Worker"]
+    subgraph background["<span style='color:#3b82f6'>Backend: Service Worker</span>"]
       b_tracker["📍 Tab Tracker<br/>Focus · dwell · interactions"]
       b_learner["🎓 Closure Learner<br/>Manual vs Auto sampling"]
       b_engine["🏷️ Category Engine<br/>Domain map · memory · signals"]
       b_orchestrator["🧹 Hygiene Orchestrator<br/>Stale check · AI Cleanup · logic"]
     end
 
-    subgraph storage["💾 Persistence: chrome.storage.local"]
+    subgraph storage["<span style='color:#f59e0b'>Persistence: chrome.storage.local</span>"]
       s_registry[("Live Registry<br/>Active tab entries")]
       s_samples[("Learning Store<br/>Behavioral samples")]
       s_settings[("User Config<br/>Rules · Whitelist · Blacklist")]
     end
   end
 
-  subgraph ipc["Communication Path"]
+  subgraph ipc["<span style='color:#94a3b8'>Communication Path</span>"]
     nativeBus["📬 Native Messaging (V2)<br/>JSON over stdio"]
   end
 
-  subgraph native["Container: macOS Swift Companion App"]
+  subgraph native["<span style='color:#10b981'>Container: macOS Swift Companion App</span>"]
     direction TB
     n_host["Native Message Host<br/>Event multiplexer"]
     n_classifier["🔤 NLP Classifier<br/>NaturalLanguage Framework"]
@@ -78,17 +91,11 @@ flowchart TB
   n_chronos <--> n_storage
   n_chronos <--> coreml
 
-  %% Styling: Use transparent fills and mid-tone strokes for Dark Mode compatibility
-  style actors fill:none,stroke:#94a3b8,stroke-width:1px
-  style browser fill:none,stroke:#3b82f6,stroke-width:2px
-  style native fill:none,stroke:#10b981,stroke-width:2px
-  style popup fill:none,stroke:#3b82f6,stroke-dasharray: 5 5
-  style background fill:none,stroke:#3b82f6
-  style storage fill:none,stroke:#f59e0b
-  style ipc fill:none,stroke:#94a3b8,stroke-dasharray: 2 2
-
-  classDef actor fill:none,stroke:#b45309,stroke-width:1px
-  classDef platform fill:none,stroke:#64748b,stroke-width:1px
+  %% Global Node Styling
+  classDef default fill:#1e293b,stroke:#3b82f6,color:#fff,stroke-width:1px
+  classDef actor fill:#334155,stroke:#f59e0b,color:#fff,stroke-width:1px
+  classDef platform fill:#0f172a,stroke:#94a3b8,color:#fff,stroke-width:1px
+  
   class user actor
   class chrome,coreml platform
 ```
