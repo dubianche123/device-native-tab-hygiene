@@ -1338,6 +1338,22 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
  * Analyse current state and return actionable suggestions.
  * Returns { suggestions: [{ level, icon, text, action? }], mem, tabCount }.
  */
+function strongestSuggestionLevel(levels = []) {
+  const rank = { ok: 0, info: 1, warning: 2, critical: 3 };
+  return levels.reduce((best, level) => (
+    (rank[level] || 0) > (rank[best] || 0) ? level : best
+  ), 'info');
+}
+
+function uniqueSuggestionActions(actions = []) {
+  const seen = new Set();
+  return actions.filter(action => {
+    if (!action?.action || seen.has(action.action)) return false;
+    seen.add(action.action);
+    return true;
+  });
+}
+
 async function getAISuggestion() {
   let settings = await getSettings();
   const mem = await getMemoryPressure();
@@ -1353,6 +1369,10 @@ async function getAISuggestion() {
 
   const suggestions = [];
   const cleanupActionsEnabled = deployStatus.mode === DEPLOYMENT_MODES.DEPLOY;
+  const { candidates, retentionContext } = await buildCleanupCandidates(settings, { now });
+  const staleCount = candidates.filter(candidate => candidate.retention.stale).length;
+  const safeTrimCount = candidates.filter(candidate => candidate.safeEligible && !candidate.retention.stale).length;
+  const broadTrimCount = candidates.filter(candidate => candidate.broadEligible && !candidate.retention.stale).length;
 
   if (deployStatus.mode === DEPLOYMENT_MODES.TEST) {
     if (!readiness.armable) {
@@ -1392,98 +1412,79 @@ async function getAISuggestion() {
     });
   }
 
-  // Tab count is the most reliable cleanup target; memory pressure may lag
-  // behind tab closure because Chromium and macOS reclaim memory lazily.
+  const cleanupSignals = [];
+  const cleanupLevels = [];
+  const cleanupActions = [];
+  let pressureCleanupNeeded = false;
+
   if (tabCount > targetTabs * 2) {
-    suggestions.push({
-      level: 'warning',
-      icon: '📑',
-      text: cleanupActionsEnabled
-        ? `${tabCount} open tabs — over 2× your target (${targetTabs}). AI Cleanup will prioritize reducing tab count.`
-        : `${tabCount} open tabs — over 2× your target (${targetTabs}). AI Clean is locked until Deploy is ready.`,
-      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
-    });
+    cleanupSignals.push(`${tabCount} tabs, over 2x target ${targetTabs}`);
+    cleanupLevels.push('warning');
+    pressureCleanupNeeded = true;
   } else if (tabCount > targetTabs) {
-    suggestions.push({
-      level: 'info',
-      icon: '📋',
-      text: cleanupActionsEnabled
-        ? `${tabCount} open tabs — above your target (${targetTabs}).`
-        : `${tabCount} open tabs — above your target (${targetTabs}). AI Clean is locked until Deploy is ready.`,
-      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
-    });
+    cleanupSignals.push(`${tabCount} tabs, target ${targetTabs}`);
+    cleanupLevels.push('info');
+    pressureCleanupNeeded = true;
   }
 
-  // Memory pressure suggestions
   if (mem.percent >= forceThreshold) {
-    suggestions.push({
-      level: 'critical',
-      icon: '🔴',
-      text: cleanupActionsEnabled
-        ? `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%). Cleanup is bounded because memory may not drop immediately.`
-        : `Memory at ${mem.percent}% — exceeds force-cleanup threshold (${forceThreshold}%), but AI Clean is locked until Deploy is ready.`,
-      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
-    });
+    cleanupSignals.push(`MEM ${mem.percent}%, over force threshold ${forceThreshold}%`);
+    cleanupLevels.push('critical');
+    pressureCleanupNeeded = true;
   } else if (mem.percent >= targetMem + 10) {
-    suggestions.push({
-      level: 'warning',
-      icon: '🟠',
-      text: cleanupActionsEnabled
-        ? `Memory at ${mem.percent}% — above target (${targetMem}%). Reducing tab count may help, but memory can lag.`
-        : `Memory at ${mem.percent}% — above target (${targetMem}%). AI Clean is locked until Deploy is ready.`,
-      action: cleanupActionsEnabled ? 'aiCleanupBroad' : undefined,
-    });
+    cleanupSignals.push(`MEM ${mem.percent}%, target ${targetMem}%`);
+    cleanupLevels.push('warning');
+    pressureCleanupNeeded = true;
   } else if (mem.percent >= targetMem) {
-    suggestions.push({
-      level: 'info',
-      icon: '🟡',
-      text: cleanupActionsEnabled
-        ? `Memory at ${mem.percent}% — slightly above target (${targetMem}%).`
-        : `Memory at ${mem.percent}% — slightly above target (${targetMem}%). AI Clean is locked until Deploy is ready.`,
-    });
+    cleanupSignals.push(`MEM ${mem.percent}%, slightly above ${targetMem}%`);
+    cleanupLevels.push('info');
   }
 
-  // Stale tabs suggestion
-  const { candidates, retentionContext } = await buildCleanupCandidates(settings, { now });
-  const staleCount = candidates.filter(candidate => candidate.retention.stale).length;
-  const safeTrimCount = candidates.filter(candidate => candidate.safeEligible && !candidate.retention.stale).length;
-  const broadTrimCount = candidates.filter(candidate => candidate.broadEligible && !candidate.retention.stale).length;
   if (staleCount > 0) {
-    const staleText = (!deployStatus.effectiveTestMode && retentionContext.currentlyIdle !== true)
-      ? `${staleCount} stale tab(s) detected. Check can review them; automatic stale closure waits until the Mac is idle.`
-      : cleanupActionsEnabled
-        ? `${staleCount} stale tab(s) detected. Run Check to review them, or AI Clean to close low-importance tabs.`
-        : `${staleCount} stale tab(s) detected. Run Check to review them; AI Clean unlocks after Deploy is ready.`;
-    suggestions.push({
-      level: 'info',
-      icon: '🧹',
-      text: staleText,
-      action: 'forceCheck',
-    });
+    cleanupSignals.push(`${staleCount} stale tab(s) need review`);
+    cleanupLevels.push('info');
   }
-  if (cleanupActionsEnabled && broadTrimCount > 0) {
+
+  if (broadTrimCount > 0) {
+    cleanupSignals.push(`${broadTrimCount} low-importance tab(s) ranked for trim`);
+    cleanupLevels.push('info');
     const safeButtonLabel = `🧊 Clean safest ${Math.max(1, Math.min(safeTrimCount || broadTrimCount, SAFE_CLEANUP_POLICY.maxCount))}`;
     const broadButtonLabel = `🧹 Clean more ${Math.max(1, Math.min(broadTrimCount, PROACTIVE_CLEANUP_POLICY.maxCount))}`;
+    if (safeTrimCount > 0) {
+      cleanupActions.push({ action: 'aiCleanupSafe', label: safeButtonLabel });
+    }
+    cleanupActions.push({ action: 'aiCleanupBroad', label: broadButtonLabel });
+  }
+  if (pressureCleanupNeeded && broadTrimCount === 0) {
+    cleanupActions.push({ action: 'aiCleanupBroad', label: tabCount > targetTabs ? '📑 Reduce tabs' : '🧹 Reduce pressure' });
+  }
+  if (staleCount > 0) {
+    cleanupActions.push({ action: 'forceCheck', label: `🔍 Review ${staleCount}` });
+  }
+
+  if (cleanupSignals.length > 0) {
+    const level = strongestSuggestionLevel(cleanupLevels);
+    const locked = !cleanupActionsEnabled;
+    const textParts = [
+      cleanupSignals.join(' · '),
+    ];
+    if (locked) {
+      textParts.push(`AI Clean is locked in ${deployStatus.mode}; Test/Armed only learns and previews.`);
+    } else if (tabCount > targetTabs || mem.percent >= targetMem) {
+      textParts.push('Cleanup will rank tabs by learned close time, background age, focus ratio, category, and tag protection; memory may lag after tabs close.');
+    } else if (safeTrimCount > 0) {
+      textParts.push(`${safeTrimCount} are the safest first cut; Clean more includes lower-confidence candidates.`);
+    } else if (retentionContext.currentlyIdle !== true && staleCount > 0) {
+      textParts.push('Check reviews stale tabs now; automatic stale closure still waits for Mac idle.');
+    } else {
+      textParts.push('Review or trim from the same decision card.');
+    }
+
     suggestions.push({
-      level: 'info',
-      icon: safeTrimCount > 0 ? '🧊' : '🪄',
-      text: safeTrimCount > 0
-        ? `${safeTrimCount} tab(s) are almost certainly the weakest ones. ${Math.max(0, broadTrimCount - safeTrimCount)} more low-importance tab(s) can be trimmed if you want to be broader.`
-        : `${broadTrimCount} low-importance tab(s) are ready to trim.`,
-      actions: safeTrimCount > 0
-        ? [
-            { action: 'aiCleanupSafe', label: safeButtonLabel },
-            { action: 'aiCleanupBroad', label: broadButtonLabel },
-          ]
-        : [
-            { action: 'aiCleanupBroad', label: broadButtonLabel },
-          ],
-    });
-  } else if (!cleanupActionsEnabled && broadTrimCount > 0) {
-    suggestions.push({
-      level: 'info',
-      icon: '🔒',
-      text: `${broadTrimCount} low-importance tab(s) are being tracked. AI Clean unlocks after Deploy is ready.`,
+      level,
+      icon: locked ? '🔒' : (level === 'critical' ? '🔴' : '🧹'),
+      text: textParts.join(' '),
+      actions: cleanupActionsEnabled ? uniqueSuggestionActions(cleanupActions) : [],
     });
   }
 

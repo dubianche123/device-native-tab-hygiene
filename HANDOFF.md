@@ -256,6 +256,8 @@ Each suggestion has `action` or `actions` plus `text`. Popup renders clickable c
 
 Popup refresh behavior: `Check`, `AI Clean`, mode changes, holiday-calendar changes, and settings saves all refresh AI Suggestions. A low-frequency 30s timer also refreshes suggestions while the popup stays open.
 
+Updated (2026-05-02): Cleanup-related suggestions are consolidated into one decision card. Tab-count pressure, memory pressure, stale tabs, and low-importance rankings should not appear as separate duplicate "turn on AI Clean" messages. The card exposes unique actions only: safe trim, broad trim / reduce tabs, and stale review.
+
 Training samples: the popup displays real `trainingSamples` from the companion. It no longer fakes `99/100` while the model is awaiting enough valid/varied samples; raw browser events are shown separately as `0 valid (N events)` when applicable.
 
 ## Closure Learning
