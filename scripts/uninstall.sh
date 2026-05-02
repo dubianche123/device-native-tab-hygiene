@@ -6,7 +6,12 @@
 set -euo pipefail
 
 HOST_NAMES=("com.neuraljanitor.companion" "com.smarttabhygiene.companion" "com.mimo.companion")
-BINARY_PATHS=("$HOME/.local/bin/NeuralJanitorCompanion" "$HOME/.local/bin/SmartTabHygieneCompanion" "$HOME/.local/bin/MimoCompanion")
+BINARY_PATHS=(
+    "$HOME/Library/Application Support/Neural-Janitor/NeuralJanitorCompanion"
+    "$HOME/.local/bin/NeuralJanitorCompanion"
+    "$HOME/.local/bin/SmartTabHygieneCompanion"
+    "$HOME/.local/bin/MimoCompanion"
+)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

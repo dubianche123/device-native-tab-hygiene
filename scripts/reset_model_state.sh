@@ -12,7 +12,7 @@
 set -euo pipefail
 
 APP_SUPPORT="${NEURAL_JANITOR_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Neural-Janitor}"
-BINARY="${NEURAL_JANITOR_COMPANION_BINARY:-$HOME/.local/bin/NeuralJanitorCompanion}"
+BINARY="${NEURAL_JANITOR_COMPANION_BINARY:-$APP_SUPPORT/NeuralJanitorCompanion}"
 
 usage() {
     cat <<'USAGE'

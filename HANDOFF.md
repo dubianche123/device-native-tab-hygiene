@@ -71,6 +71,7 @@ NPU disconnect behavior:
 - NPU/GPU markers become `error`.
 - CPU becomes `active` as the browser heuristic fallback.
 - Popup Compute Path should explain the disconnect reason from `disconnectReason`.
+- JS uses short-lived native ports in `idle-detector.js`; do not reintroduce a global long-lived `connectNative()` port because it can keep Chrome/Edge waiting during shutdown.
 
 ## Important Paths
 
@@ -83,6 +84,7 @@ NPU disconnect behavior:
 - Swift companion: `companion/NeuralJanitorCompanion/Sources/main.swift`
 - Install script: `scripts/install.sh`
 - Uninstall script: `scripts/uninstall.sh`
+- Installed companion path: `~/Library/Application Support/Neural-Janitor/NeuralJanitorCompanion`
 - Model export script: `scripts/export_model_bundle.sh`
 - Model import script: `scripts/import_model_bundle.sh`
 - Bootstrap trainer: `scripts/train_model.py`
@@ -325,7 +327,7 @@ Core JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 ## Current Operational Notes
 
 - Browser extension install is still Load Unpacked from `extension/`.
-- Full local ML requires rerunning `./scripts/install.sh <chrome-extension-id> [edge-extension-id]` after the native host id rename. The script now refuses placeholder ids and can write multiple allowed origins when Chrome/Edge ids differ.
+- Full local ML requires rerunning `./scripts/install.sh <chrome-extension-id> [edge-extension-id]` after the native host id rename. The script now refuses placeholder ids, installs the binary under `~/Library/Application Support/Neural-Janitor/`, and can write multiple allowed origins when Chrome/Edge ids differ.
 - Chrome/Edge cannot silently install a Native Messaging host from an extension package; a script, signed app, or pkg installer is still required for companion setup.
 - Cross-Mac model transfer is snapshot-based. Use `./scripts/export_model_bundle.sh --output ~/Desktop` on the source Mac and `./scripts/import_model_bundle.sh <bundle.tar.gz>` on the target Mac after installing the extension/companion. Do not live-sync `~/Library/Application Support/Neural-Janitor/` through iCloud while the companion is running; `activity_events.json` is hot-written and can conflict.
 - Transfer bundle defaults to model artifacts only: `TabIdlePredictor.mlmodel`, `idle_lookup.json`, and `model_metrics.json`. Raw `activity_events.json` requires `--with-events` on export and import.

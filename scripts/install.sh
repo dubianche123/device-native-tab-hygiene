@@ -18,7 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 COMPANION_DIR="$PROJECT_DIR/companion/NeuralJanitorCompanion"
 HOST_NAME="com.neuraljanitor.companion"
-BINARY_PATH="$HOME/.local/bin/NeuralJanitorCompanion"
+APP_SUPPORT_DIR="$HOME/Library/Application Support/Neural-Janitor"
+BINARY_PATH="$APP_SUPPORT_DIR/NeuralJanitorCompanion"
 PREBUILT_BINARY="${NEURAL_JANITOR_COMPANION_BINARY:-${SMART_TAB_HYGIENE_COMPANION_BINARY:-${MIMO_COMPANION_BINARY:-}}}"
 
 EXTENSION_IDS=()
@@ -95,7 +96,7 @@ ok "Build succeeded"
 
 # ── Step 2: Install binary ─────────────────────────────────────────
 
-mkdir -p "$HOME/.local/bin"
+mkdir -p "$APP_SUPPORT_DIR"
 cp "$BUILD_BINARY" "$BINARY_PATH"
 chmod +x "$BINARY_PATH"
 ok "Installed binary to $BINARY_PATH"

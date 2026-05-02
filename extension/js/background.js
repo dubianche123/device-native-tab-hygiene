@@ -60,7 +60,6 @@ import {
 import { getLearningRootDomain, isSearchResultPage, SEARCH_RESULTS_CATEGORY } from './search-results.js';
 import {
   classifyURL,
-  connectToCompanion,
   recordActivity,
   requestCompanionHealth,
   requestPredictions,
@@ -808,7 +807,6 @@ async function bootstrapBrowserState(source = 'startup') {
   await snapshotAllTabs();
   await reconcileRestoredSessionTabs().catch(() => {});
   setupAlarms();
-  connectToCompanion();
   await syncClosureLearningToCompanion().catch(() => {});
   requestPredictions();
   await resumeActiveFocusedTab();

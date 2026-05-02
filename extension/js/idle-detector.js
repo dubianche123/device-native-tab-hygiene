@@ -21,7 +21,6 @@ import { getIdlePredictions, setIdlePredictions, getCompanionStatus, setCompanio
 import { getRestDayLevel } from './holidays.js';
 import { hourInWindow, referenceWindowForRestLevel, scheduleToIPC, timeToHour } from './idle-schedule.js';
 
-let nativePort = null;
 let companionQueue = Promise.resolve();
 
 function dateAfterDays(baseDate, dayOffset) {
@@ -42,29 +41,9 @@ function buildHolidayLevels(calendar, baseDate = new Date()) {
 // ── Native Messaging helpers ──────────────────────────────────────────
 
 export function connectToCompanion() {
-  try {
-    nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
-    nativePort.onMessage.addListener(handleCompanionMessage);
-    nativePort.onDisconnect.addListener(() => {
-      const error = chrome.runtime.lastError?.message || 'Native Messaging port disconnected';
-      console.warn('[Neural-Janitor] Companion disconnected:', error);
-      nativePort = null;
-      disconnectedStatus(error).then(s => setCompanionStatus(s));
-    });
-    setCompanionStatus({
-      connected: true,
-      lastSync: Date.now(),
-      protocolVersion: IPC_PROTOCOL_VERSION,
-      appName: APP_NAME,
-      engineCodename: ENGINE_CODENAME,
-      telemetryStatus: 'connecting',
-    });
-    console.log('[Neural-Janitor] Connected to companion app');
-  } catch (err) {
-    console.warn('[Neural-Janitor] Could not connect to companion:', err.message);
-    nativePort = null;
-    disconnectedStatus(err.message).then(s => setCompanionStatus(s));
-  }
+  // Native Messaging is intentionally request-scoped. Keeping a long-lived
+  // native port can keep the browser waiting on shutdown.
+  return requestCompanionHealth().catch(() => null);
 }
 
 function withIPCMetadata(message) {
@@ -76,29 +55,50 @@ function withIPCMetadata(message) {
   };
 }
 
-function sendToCompanion(message) {
+function sendToCompanion(message, { timeoutMs = 5000 } = {}) {
   const run = () => new Promise((resolve, reject) => {
-    if (!nativePort) {
-      reject(new Error('Companion not connected'));
-      return;
-    }
+    let port = null;
     let timeout = null;
-    const handler = (response) => {
+    let settled = false;
+
+    const cleanup = () => {
       clearTimeout(timeout);
-      nativePort.onMessage.removeListener(handler);
-      resolve(response);
+      if (port) {
+        try { port.onMessage.removeListener(onMessage); } catch { /* ignore */ }
+        try { port.onDisconnect.removeListener(onDisconnect); } catch { /* ignore */ }
+        try { port.disconnect(); } catch { /* already closed */ }
+      }
+      port = null;
     };
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+
+    const onMessage = (response) => {
+      handleCompanionMessage(response);
+      finish(resolve, response);
+    };
+
+    const onDisconnect = () => {
+      const error = chrome.runtime.lastError?.message || 'Native Messaging port disconnected';
+      finish(reject, new Error(error));
+    };
+
     timeout = setTimeout(() => {
-      nativePort?.onMessage.removeListener(handler);
-      reject(new Error('Companion response timeout'));
-    }, 10_000);
-    nativePort.onMessage.addListener(handler);
+      finish(reject, new Error('Companion response timeout'));
+    }, timeoutMs);
+
     try {
-      nativePort.postMessage(withIPCMetadata(message));
+      port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+      port.onMessage.addListener(onMessage);
+      port.onDisconnect.addListener(onDisconnect);
+      port.postMessage(withIPCMetadata(message));
     } catch (err) {
-      clearTimeout(timeout);
-      nativePort.onMessage.removeListener(handler);
-      reject(err);
+      finish(reject, err);
     }
   });
 
@@ -108,7 +108,6 @@ function sendToCompanion(message) {
 }
 
 export async function sendCompanionRequest(message) {
-  if (!nativePort) connectToCompanion();
   return sendToCompanion(message);
 }
 
@@ -179,12 +178,11 @@ function normalizeHealthStatus(status = {}) {
  * Send an activity timestamp to the companion for ML training.
  */
 export async function recordActivity(activity) {
-  if (!nativePort) connectToCompanion();
   try {
     const payload = typeof activity === 'object'
       ? { type: 'activity', ...activity }
       : { type: 'activity', timestamp: activity };
-    await sendToCompanion(payload);
+    await sendToCompanion(payload, { timeoutMs: 2500 });
   } catch {
     // Companion unavailable — silent fallback
   }
@@ -200,7 +198,6 @@ export async function recordActivity(activity) {
  * The model uses the ANE (Apple Neural Engine) automatically via Core ML.
  */
 export async function requestPredictions() {
-  if (!nativePort) connectToCompanion();
   try {
     const settings = await getSettings();
     const calendar = settings.holidayCalendar || 'none';
@@ -213,7 +210,7 @@ export async function requestPredictions() {
       holidayLevel,
       holidayLevels,
       idleSchedule,
-    });
+    }, { timeoutMs: 6000 });
     if (response?.predictions) {
       await setIdlePredictions(response.predictions);
       if (response.modelMode) {
@@ -241,7 +238,6 @@ export async function requestPredictions() {
  * Ask the companion for the current ML runtime / local hardware status.
  */
 export async function requestCompanionHealth() {
-  if (!nativePort) connectToCompanion();
   try {
     const settings = await getSettings();
     const calendar = settings.holidayCalendar || 'none';
@@ -250,7 +246,7 @@ export async function requestCompanionHealth() {
       type: 'health',
       holidayLevel,
       idleSchedule: scheduleToIPC(settings.idleSchedule),
-    });
+    }, { timeoutMs: 4000 });
     if (response?.type === 'health') {
       const status = {
         connected: true,
@@ -276,9 +272,8 @@ export async function requestCompanionHealth() {
  * Request the companion to wipe its local learning artifacts.
  */
 export async function resetCompanionLearning() {
-  if (!nativePort) connectToCompanion();
   try {
-    const response = await sendToCompanion({ type: 'resetLearningState' });
+    const response = await sendToCompanion({ type: 'resetLearningState' }, { timeoutMs: 6000 });
     if (response?.ok) {
       const status = await requestCompanionHealth().catch(() => null);
       return { ok: true, response, status };
@@ -321,10 +316,9 @@ export async function isInIdleWindow() {
  * Request the companion to classify an ambiguous URL via on-device NLP.
  */
 export async function classifyURL(input) {
-  if (!nativePort) connectToCompanion();
   try {
     const payload = typeof input === 'object' ? input : { url: input };
-    const response = await sendToCompanion({ type: 'classifyURL', ...payload });
+    const response = await sendToCompanion({ type: 'classifyURL', ...payload }, { timeoutMs: 5000 });
     return response?.category ? response : null;
   } catch {
     return null;

@@ -89,6 +89,14 @@ func writeLog(_ message: String) {
     }
 }
 
+func backupFileIfPresent(_ url: URL) {
+    guard FileManager.default.fileExists(atPath: url.path) else { return }
+    let stamp = Int(Date().timeIntervalSince1970)
+    let backupURL = url.deletingLastPathComponent()
+        .appendingPathComponent("\(url.lastPathComponent).\(stamp).bak")
+    try? FileManager.default.copyItem(at: url, to: backupURL)
+}
+
 // MARK: - Activity Data Store
 
 struct ActivityEvent: Codable {
@@ -175,8 +183,10 @@ final class ActivityStore {
         lock.lock()
         events = []
         lock.unlock()
+        backupFileIfPresent(fileURL)
         try? FileManager.default.removeItem(at: fileURL)
         let legacyURL = appSupportDir.appendingPathComponent("activity_log.json")
+        backupFileIfPresent(legacyURL)
         try? FileManager.default.removeItem(at: legacyURL)
     }
 }
@@ -505,12 +515,20 @@ private final class ClosureLearningStore {
         samples = []
         sampleIDs = []
         lock.unlock()
+        backupFileIfPresent(fileURL)
         try? FileManager.default.removeItem(at: fileURL)
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let loaded = try? JSONDecoder().decode([ClosureSample].self, from: data) else { return }
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        let loaded: [ClosureSample]
+        if let decoded = try? JSONDecoder().decode([ClosureSample].self, from: data) {
+            loaded = decoded
+        } else if let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            loaded = raw.map { ClosureSample(dictionary: $0) }
+        } else {
+            return
+        }
         lock.lock()
         samples = loaded
         sampleIDs = Set(loaded.map(\.sampleId))
@@ -632,7 +650,7 @@ final class IdlePredictor {
 
     init(store: ActivityStore) {
         self.store = store
-        loadArtifacts()
+        loadArtifacts(loadModelArtifact: false)
     }
 
     var mode: String {
@@ -647,7 +665,6 @@ final class IdlePredictor {
         idleSchedule: IdleReferenceSchedule = .defaultValue
     ) -> ([IdlePrediction], Bool) {
         let resetApplied = applyPendingResetIfNeeded()
-        maybeTrainIfNeeded()
         lastInferenceAt = Date()
         inferenceCount += 1
 
@@ -724,7 +741,7 @@ final class IdlePredictor {
 
         try saveLookup(from: samples)
         try trainCoreMLModel(from: samples)
-        loadArtifacts()
+        loadArtifacts(loadModelArtifact: true)
         lastTrainingCompletedAt = Date()
         metrics = ModelMetrics(
             trainingSamples: samples.count,
@@ -744,7 +761,6 @@ final class IdlePredictor {
     ) -> [String: Any] {
         let resetApplied = applyPendingResetIfNeeded()
         let effectiveActivityCount = (resetRequested || resetApplied) ? store.count : activityCount
-        maybeTrainIfNeeded()
         let shouldRefreshMetrics = lastMetricsRefresh
             .map { Date().timeIntervalSince($0) > 15 * 60 } ?? true
         if shouldRefreshMetrics {
@@ -829,15 +845,20 @@ final class IdlePredictor {
         return payload
     }
 
-    private func loadArtifacts() {
+    private func loadArtifacts(loadModelArtifact: Bool = false) {
         loadLookup()
         loadMetrics()
         if hasUndertrainedArtifacts {
             writeLog("Ignoring undertrained idle artifacts (\(metrics.trainingSamples)/\(minimumTrainingSamples) labeled samples)")
             lookup = [:]
             model = nil
+            return
         }
-        loadModel()
+        if loadModelArtifact {
+            loadModel()
+        } else {
+            model = nil
+        }
     }
 
     private func loadModel() {
@@ -933,6 +954,7 @@ final class IdlePredictor {
         inferenceCount = 0
         let urls = [modelURL, lookupURL, metricsURL]
         for url in urls {
+            backupFileIfPresent(url)
             try? FileManager.default.removeItem(at: url)
         }
         if writeSentinel {

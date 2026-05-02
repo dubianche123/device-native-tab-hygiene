@@ -220,6 +220,8 @@ chmod +x scripts/install.sh
 
 之后重新加载扩展。扩展发起 Native Messaging 连接时，伴随程序会自动启动。
 如果 Chrome 和 Edge 的扩展 ID 不一样，就把两个 ID 都传给脚本，这样 native host manifest 会同时允许两边。
+安装脚本会把伴随程序放在 `~/Library/Application Support/Neural-Janitor/NeuralJanitorCompanion`。
+Native Messaging 连接是短连接：浏览器每次请求启动 host，拿到一次响应后主动断开，避免拖住浏览器退出。
 
 ### 4. 伴随程序变化后
 

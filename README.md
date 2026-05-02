@@ -220,6 +220,8 @@ chmod +x scripts/install.sh
 
 Reload the extension afterward. The companion starts when the extension opens a Native Messaging connection.
 If Chrome and Edge end up with different extension IDs, pass both so the native host manifest allows both browsers.
+The installer places the companion at `~/Library/Application Support/Neural-Janitor/NeuralJanitorCompanion`.
+Native Messaging connections are short-lived: the browser opens the host for a request, receives one response, then disconnects so browser shutdown is not blocked.
 
 ### 4. After companion changes
 
