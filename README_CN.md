@@ -215,17 +215,18 @@ extension/
 
 ```bash
 chmod +x scripts/install.sh
-./scripts/install.sh YOUR_EXTENSION_ID
+./scripts/install.sh YOUR_CHROME_EXTENSION_ID [YOUR_EDGE_EXTENSION_ID]
 ```
 
 之后重新加载扩展。扩展发起 Native Messaging 连接时，伴随程序会自动启动。
+如果 Chrome 和 Edge 的扩展 ID 不一样，就把两个 ID 都传给脚本，这样 native host manifest 会同时允许两边。
 
 ### 4. 伴随程序变化后
 
 如果 Swift 伴随程序或 native host 元数据变化了，再运行一次：
 
 ```bash
-./scripts/install.sh YOUR_EXTENSION_ID
+./scripts/install.sh YOUR_CHROME_EXTENSION_ID [YOUR_EDGE_EXTENSION_ID]
 ```
 
 ## 在多台 Mac 之间迁移本地模型

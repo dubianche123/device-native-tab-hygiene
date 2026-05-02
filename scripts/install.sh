@@ -9,7 +9,7 @@
 #
 # Usage:
 #   chmod +x scripts/install.sh
-#   ./scripts/install.sh
+#   ./scripts/install.sh <chrome-extension-id> [edge-extension-id]
 # ═══════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -19,8 +19,37 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 COMPANION_DIR="$PROJECT_DIR/companion/NeuralJanitorCompanion"
 HOST_NAME="com.neuraljanitor.companion"
 BINARY_PATH="$HOME/.local/bin/NeuralJanitorCompanion"
-EXTENSION_ID="${1:-${NEURAL_JANITOR_EXTENSION_ID:-${SMART_TAB_HYGIENE_EXTENSION_ID:-${MIMO_EXTENSION_ID:-REPLACE_WITH_EXTENSION_ID}}}}"
 PREBUILT_BINARY="${NEURAL_JANITOR_COMPANION_BINARY:-${SMART_TAB_HYGIENE_COMPANION_BINARY:-${MIMO_COMPANION_BINARY:-}}}"
+
+EXTENSION_IDS=()
+if [ "$#" -gt 0 ]; then
+    EXTENSION_IDS=("$@")
+elif [ -n "${NEURAL_JANITOR_EXTENSION_IDS:-}" ]; then
+    IFS=',' read -r -a EXTENSION_IDS <<< "$NEURAL_JANITOR_EXTENSION_IDS"
+elif [ -n "${NEURAL_JANITOR_EXTENSION_ID:-}" ]; then
+    EXTENSION_IDS=("$NEURAL_JANITOR_EXTENSION_ID")
+elif [ -n "${SMART_TAB_HYGIENE_EXTENSION_ID:-}" ]; then
+    EXTENSION_IDS=("$SMART_TAB_HYGIENE_EXTENSION_ID")
+elif [ -n "${MIMO_EXTENSION_ID:-}" ]; then
+    EXTENSION_IDS=("$MIMO_EXTENSION_ID")
+fi
+
+FILTERED_EXTENSION_IDS=()
+for raw_id in "${EXTENSION_IDS[@]}"; do
+    ext_id="${raw_id//[[:space:]]/}"
+    if [ -n "$ext_id" ] && [ "$ext_id" != "REPLACE_WITH_EXTENSION_ID" ]; then
+        FILTERED_EXTENSION_IDS+=("$ext_id")
+    fi
+done
+
+EXTENSION_IDS=("${FILTERED_EXTENSION_IDS[@]}")
+
+if [ "${#EXTENSION_IDS[@]}" -eq 0 ]; then
+    err "Missing extension id."
+    err "Usage: ./scripts/install.sh <chrome-extension-id> [edge-extension-id]"
+    err "Or set NEURAL_JANITOR_EXTENSION_IDS=chrome-id,edge-id"
+    exit 1
+fi
 
 # ── Colours ────────────────────────────────────────────────────────
 
@@ -74,6 +103,7 @@ ok "Installed binary to $BINARY_PATH"
 # ── Step 3: Register Native Messaging Host ─────────────────────────
 
 # Generate the JSON manifest
+ALLOWED_ORIGINS=$(for ext_id in "${EXTENSION_IDS[@]}"; do printf '    "chrome-extension://%s/"\n' "$ext_id"; done)
 MANIFEST_JSON=$(cat <<EOF
 {
   "name": "$HOST_NAME",
@@ -81,8 +111,7 @@ MANIFEST_JSON=$(cat <<EOF
   "path": "$BINARY_PATH",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://$EXTENSION_ID/"
-  ]
+$ALLOWED_ORIGINS  ]
 }
 EOF
 )
@@ -145,16 +174,12 @@ info "     $PROJECT_DIR/extension"
 info ""
 info "2. Copy the extension ID from the extensions page"
 info ""
-if [ "$EXTENSION_ID" = "REPLACE_WITH_EXTENSION_ID" ]; then
-info "3. Update the manifest files:"
-BROWSER_MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
-info "   Edit: $BROWSER_MANIFEST_DIR/$HOST_NAME.json"
-info "   Replace 'REPLACE_WITH_EXTENSION_ID' with your actual ID"
-info "   Or rerun: ./scripts/install.sh <extension-id>"
-else
-info "3. Native Messaging allowed origin set to:"
-info "   chrome-extension://$EXTENSION_ID/"
-fi
+info "3. Native Messaging allowed origins:"
+for ext_id in "${EXTENSION_IDS[@]}"; do
+info "   • chrome-extension://$ext_id/"
+done
+info ""
+info "   If Chrome and Edge show different ids, rerun the script with both ids."
 info ""
 info "4. Restart the browser"
 info ""

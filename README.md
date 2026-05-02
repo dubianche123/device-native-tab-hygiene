@@ -215,17 +215,18 @@ Copy the extension ID shown by the browser.
 
 ```bash
 chmod +x scripts/install.sh
-./scripts/install.sh YOUR_EXTENSION_ID
+./scripts/install.sh YOUR_CHROME_EXTENSION_ID [YOUR_EDGE_EXTENSION_ID]
 ```
 
 Reload the extension afterward. The companion starts when the extension opens a Native Messaging connection.
+If Chrome and Edge end up with different extension IDs, pass both so the native host manifest allows both browsers.
 
 ### 4. After companion changes
 
 If the Swift companion or native host metadata changes, rerun:
 
 ```bash
-./scripts/install.sh YOUR_EXTENSION_ID
+./scripts/install.sh YOUR_CHROME_EXTENSION_ID [YOUR_EDGE_EXTENSION_ID]
 ```
 
 ## Moving The Local Model Between Macs
