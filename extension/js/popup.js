@@ -379,17 +379,22 @@ function activityHeadlineText(status = {}) {
 function idleLikelihoodText(status = {}, confidence = 0) {
   const formatted = formatPercent(confidence);
   const currentState = String(status.currentActivityState || '').toLowerCase();
-  const metric = currentState === 'active' ? 'idle prior' : 'idle likelihood';
+  const rawPrior = typeof status.rawIdlePrior === 'number' ? status.rawIdlePrior : null;
+  const overridden = currentState === 'active'
+    && rawPrior !== null
+    && rawPrior > confidence + 0.05;
+  const metric = overridden || currentState === 'active' ? 'idle' : 'idle likelihood';
+  const suffix = overridden ? ` · prior ${formatPercent(rawPrior)}` : '';
   if (status.runtime === 'coreml') {
-    return `${acceleratorLabel(status)} ${metric}: ${formatted}`;
+    return `${acceleratorLabel(status)} ${metric}: ${formatted}${suffix}`;
   }
   if (status.runtime === 'lookup') {
-    return `Learning ${metric}: ${formatted}`;
+    return `Learning ${metric}: ${formatted}${suffix}`;
   }
   if (status.runtime === 'disabled') {
     return 'ML off: no idle estimate';
   }
-  return `Fallback ${metric}: ${formatted}`;
+  return `Fallback ${metric}: ${formatted}${suffix}`;
 }
 
 function retrainRuntimeLabel(status = {}) {
@@ -451,9 +456,15 @@ function renderConfidenceCurve(curve = []) {
 
   container.innerHTML = points.slice(0, 7).map((point) => {
     const confidence = Math.max(0, Math.min(1, point.confidence || 0));
+    const rawPrior = typeof point.rawPrior === 'number'
+      ? Math.max(0, Math.min(1, point.rawPrior))
+      : null;
     const label = point.offsetMinutes === 0 ? 'now' : `+${Math.round(point.offsetMinutes / 60 * 10) / 10}h`;
+    const title = rawPrior !== null && rawPrior > confidence + 0.05
+      ? `${formatClock(point.hour, point.minute)} ${formatPercent(confidence)} (prior ${formatPercent(rawPrior)})`
+      : `${formatClock(point.hour, point.minute)} ${formatPercent(confidence)}`;
     return `
-      <div class="confidence-curve__bar" title="${formatClock(point.hour, point.minute)} ${formatPercent(confidence)}">
+      <div class="confidence-curve__bar" title="${escapeHTML(title)}">
         <div class="confidence-curve__fill" style="height:${Math.max(6, confidence * 28)}px"></div>
         <div class="confidence-curve__label">${escapeHTML(label)}</div>
       </div>`;

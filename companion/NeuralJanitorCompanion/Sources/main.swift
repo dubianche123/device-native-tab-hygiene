@@ -232,6 +232,11 @@ final class IdlePredictor {
     private let modelURL = appSupportDir.appendingPathComponent("TabIdlePredictor.mlmodel")
     private let lookupURL = appSupportDir.appendingPathComponent("idle_lookup.json")
     private let metricsURL = appSupportDir.appendingPathComponent("model_metrics.json")
+    private let minimumActivityEvents = 100
+    private let minimumTrainingSamples = 100
+    private let retrainInterval: TimeInterval = 6 * 60 * 60
+    private let activeOverrideHorizon: TimeInterval = 2 * 60 * 60
+    private let maximumIdleWindowHours = 10.0
     private let featureColumns = [
         "dayOfWeek",
         "hour",
@@ -305,7 +310,8 @@ final class IdlePredictor {
             }
 
             let blocks = findContiguousBlocks(samples, threshold: 0.55)
-            if let best = blocks.max(by: { $0.duration < $1.duration }) {
+            if let best = blocks.max(by: { $0.duration < $1.duration }),
+               best.duration <= maximumIdleWindowHours {
                 predictions.append(IdlePrediction(
                     day: day,
                     startHour: best.start,
@@ -328,13 +334,17 @@ final class IdlePredictor {
         _ = applyPendingResetIfNeeded()
         lastTrainingAttempt = Date()
         let events = store.all().sorted { $0.timestamp < $1.timestamp }
-        guard events.count >= 100 else {
-            writeLog("Not enough activity samples to train (\(events.count)/100)")
+        guard events.count >= minimumActivityEvents else {
+            writeLog("Not enough activity events to train (\(events.count)/\(minimumActivityEvents))")
             return
         }
 
         writeLog("Training Create ML idle predictor from \(events.count) browser activity samples")
         let samples = buildTrainingSamples(from: events)
+        guard samples.count >= minimumTrainingSamples else {
+            writeLog("Training skipped because labeled idle samples are too sparse (\(samples.count)/\(minimumTrainingSamples))")
+            return
+        }
         guard Set(samples.map(\.label)).count >= 2 else {
             writeLog("Training skipped because samples contain only one class")
             return
@@ -362,6 +372,7 @@ final class IdlePredictor {
     ) -> [String: Any] {
         let resetApplied = applyPendingResetIfNeeded()
         let effectiveActivityCount = (resetRequested || resetApplied) ? store.count : activityCount
+        maybeTrainIfNeeded()
         let shouldRefreshMetrics = lastMetricsRefresh
             .map { Date().timeIntervalSince($0) > 15 * 60 } ?? true
         if shouldRefreshMetrics {
@@ -399,11 +410,13 @@ final class IdlePredictor {
             "activityCount": activityCount,
             "trainingSamples": trainingSamples,
             "targetTrainingSamples": 1_000,
-            "minimumTrainingSamples": 100,
+            "minimumTrainingSamples": minimumTrainingSamples,
             "modelMaturity": maturity,
             "modelAccuracy": modelAccuracyValue,
             "readinessReason": readinessReason(activityCount: effectiveActivityCount),
             "currentIdleConfidence": decision["currentIdleConfidence"] ?? 0.0,
+            "rawIdlePrior": decision["rawIdlePrior"] ?? decision["currentIdleConfidence"] ?? 0.0,
+            "activityOverrideActive": decision["activityOverrideActive"] ?? false,
             "confidenceCurve": decision["confidenceCurve"] ?? [],
             "decisionThreshold": 0.55,
             "powerMode": "low",
@@ -447,10 +460,19 @@ final class IdlePredictor {
     private func loadArtifacts() {
         loadLookup()
         loadMetrics()
+        if hasUndertrainedArtifacts {
+            writeLog("Ignoring undertrained idle artifacts (\(metrics.trainingSamples)/\(minimumTrainingSamples) labeled samples)")
+            lookup = [:]
+            model = nil
+        }
         loadModel()
     }
 
     private func loadModel() {
+        guard !hasUndertrainedArtifacts else {
+            model = nil
+            return
+        }
         guard FileManager.default.fileExists(atPath: modelURL.path) else {
             model = nil
             return
@@ -501,6 +523,10 @@ final class IdlePredictor {
         if let retrainedAt = loaded.lastRetrainedAt {
             lastTrainingCompletedAt = Date(timeIntervalSince1970: retrainedAt)
         }
+    }
+
+    private var hasUndertrainedArtifacts: Bool {
+        metrics.trainingSamples > 0 && metrics.trainingSamples < minimumTrainingSamples
     }
 
     private func saveMetrics() {
@@ -564,6 +590,10 @@ final class IdlePredictor {
         store.all().last
     }
 
+    private func latestActiveEvent() -> ActivityEvent? {
+        store.all().last(where: { $0.isActiveState })
+    }
+
     private func currentActivityState() -> String {
         guard let latest = latestActivityEvent() else { return "unknown" }
         return latest.state
@@ -575,8 +605,13 @@ final class IdlePredictor {
     }
 
     private func maybeTrainIfNeeded() {
-        guard model == nil, store.count >= 100 else { return }
+        guard store.count >= minimumActivityEvents else { return }
         if let last = lastTrainingAttempt, Date().timeIntervalSince(last) < 60 * 60 { return }
+        let hasPredictor = model != nil || !lookup.isEmpty
+        let staleModel = lastTrainingCompletedAt
+            .map { Date().timeIntervalSince($0) > retrainInterval } ?? true
+        let shouldRetrain = !hasPredictor || hasUndertrainedArtifacts || staleModel
+        guard shouldRetrain else { return }
         lastTrainingAttempt = Date()
         do {
             try retrain()
@@ -671,7 +706,7 @@ final class IdlePredictor {
         let day = (comps.weekday ?? 1) - 1
         let hour = comps.hour ?? 0
         let minute = comps.minute ?? 0
-        let current = probability(
+        let rawCurrent = probability(
             day: day,
             hour: hour,
             minute: minute,
@@ -679,6 +714,7 @@ final class IdlePredictor {
             holidayLevel: holidayLevel,
             idleSchedule: idleSchedule
         )
+        let current = applyRecentActivityOverride(rawCurrent, targetDate: now)
 
         var curve: [[String: Any]] = []
         for offset in stride(from: 0, through: 180, by: 30) {
@@ -687,25 +723,45 @@ final class IdlePredictor {
             let d = (c.weekday ?? 1) - 1
             let h = c.hour ?? 0
             let m = c.minute ?? 0
+            let raw = probability(
+                day: d,
+                hour: h,
+                minute: m,
+                events: events,
+                holidayLevel: holidayLevel,
+                idleSchedule: idleSchedule
+            )
             curve.append([
                 "offsetMinutes": offset,
                 "hour": h,
                 "minute": m,
-                "confidence": probability(
-                    day: d,
-                    hour: h,
-                    minute: m,
-                    events: events,
-                    holidayLevel: holidayLevel,
-                    idleSchedule: idleSchedule
-                ),
+                "confidence": applyRecentActivityOverride(raw, targetDate: date),
+                "rawPrior": raw,
             ])
         }
 
         return [
             "currentIdleConfidence": current,
+            "rawIdlePrior": rawCurrent,
+            "activityOverrideActive": current < rawCurrent,
             "confidenceCurve": curve,
         ]
+    }
+
+    private func applyRecentActivityOverride(_ probability: Double, targetDate: Date) -> Double {
+        guard let lastActive = latestActiveEvent()?.timestamp else { return probability }
+        let elapsed = targetDate.timeIntervalSince1970 - lastActive
+        guard elapsed >= 0, elapsed <= activeOverrideHorizon else { return probability }
+
+        let cap: Double
+        if elapsed <= 15 * 60 {
+            cap = 0.05
+        } else if elapsed <= 60 * 60 {
+            cap = 0.25
+        } else {
+            cap = 0.45
+        }
+        return min(probability, cap)
     }
 
     private func recentInferenceActivity() -> String {
@@ -717,8 +773,11 @@ final class IdlePredictor {
         if model != nil {
             return "Core ML model loaded"
         }
-        if activityCount < 100 {
-            return "Collecting \(activityCount)/100 samples before first Core ML training run"
+        if activityCount < minimumActivityEvents {
+            return "Collecting \(activityCount)/\(minimumActivityEvents) activity events before first local training run"
+        }
+        if metrics.trainingSamples > 0 && metrics.trainingSamples < minimumTrainingSamples {
+            return "Collecting stronger idle labels (\(metrics.trainingSamples)/\(minimumTrainingSamples)) before trusting Model mode"
         }
         if !lookup.isEmpty {
             return "CPU lookup active; Core ML model artifact is not loaded yet"
@@ -861,12 +920,10 @@ final class IdlePredictor {
         guard let first = events.first?.timestamp, let last = events.last?.timestamp else { return [] }
 
         let calendar = Calendar.current
-        let gapThreshold: TimeInterval = 30 * 60
         var current = Date(timeIntervalSince1970: first)
         let end = Date(timeIntervalSince1970: last)
         var samples: [TrainingSample] = []
         let activeEvents = events.filter(\.isActiveState)
-        let activeTimestamps = activeEvents.map(\.timestamp)
 
         while current <= end {
             let ts = current.timeIntervalSince1970
@@ -874,19 +931,21 @@ final class IdlePredictor {
             let day = (components.weekday ?? 1) - 1
             let hour = components.hour ?? 0
             let minute = components.minute ?? 0
-            let nearestActiveGap = nearestGap(to: ts, in: activeTimestamps)
             let lastEvent = eventBefore(ts, in: events)
+            let lastActive = eventBefore(ts, in: activeEvents)?.timestamp
             let label: String
             if lastEvent?.isIdleState == true {
                 label = "idle"
+            } else if let lastActive, ts - lastActive <= activeOverrideHorizon {
+                label = "active"
             } else {
-                label = nearestActiveGap > gapThreshold ? "idle" : "active"
+                current = current.addingTimeInterval(15 * 60)
+                continue
             }
             let recentActiveEvents = activeEvents.filter { $0.timestamp >= ts - 24 * 60 * 60 && $0.timestamp <= ts }
             let activeDays = Set(activeEvents
                 .filter { $0.timestamp >= ts - 7 * 24 * 60 * 60 && $0.timestamp <= ts }
                 .map { calendar.ordinality(of: .day, in: .era, for: Date(timeIntervalSince1970: $0.timestamp)) ?? 0 })
-            let lastActive = eventBefore(ts, in: activeEvents)?.timestamp
             let dwellValues = recentActiveEvents.map { $0.dwellMs / 60_000.0 }.filter { $0 > 0 }
             let avgDwell = dwellValues.isEmpty ? 0 : dwellValues.reduce(0, +) / Double(dwellValues.count)
             samples.append(TrainingSample(

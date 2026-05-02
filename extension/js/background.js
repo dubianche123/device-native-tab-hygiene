@@ -469,7 +469,7 @@ async function recordBrowserActivity(state = 'active', tab = null, extra = {}) {
   const entry = tab?.id ? await getTabEntry(tab.id) : (activeSession?.tabId ? await getTabEntry(activeSession.tabId) : null);
   const tabCount = await getTabCount();
 
-  recordActivity({
+  await recordActivity({
     timestamp,
     state,
     tabId: tab?.id || activeSession?.tabId || null,
@@ -1689,6 +1689,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             },
           });
         } else {
+          await resumeActiveFocusedTab();
+          await recordBrowserActivity('active');
           const health = await requestCompanionHealth();
           if (health?.resetRequested) {
             await clearLearningState();
