@@ -138,7 +138,7 @@ Three-tier classification in `extension/js/categorizer.js`:
 
 Key rule: URL path substrings are **not** matched against generic category keywords. This prevents false positives like Reuters `/openai/` path matching "open" → AI category. Only narrowly-scoped path exceptions are allowed, such as Microsoft/Bing Rewards and API docs paths.
 
-**Root-domain category memory**: `extension/js/storage.js` stores `domainCategoryMemory` keyed by `getRootDomain(url)` from `extension/js/domain-utils.js`. When a domain has repeated high-confidence non-`other` classifications, low-confidence future pages under that same root can be upgraded with source `domain-memory`. This is local-only, capped at 500 domains, and skips broad multi-service roots such as `google.com`, `bing.com`, `microsoft.com`, `yahoo.co.jp`, and `amazon.com`.
+**Root-domain category memory**: `extension/js/storage.js` stores `domainCategoryMemory` keyed by `getRootDomain(url)` from `extension/js/domain-utils.js`. When a domain has repeated high-confidence non-`other` classifications, low-confidence future pages under that same root can be upgraded with source `domain-memory`. This is local-only, capped at 500 domains, and skips broad multi-service roots such as `google.com`, `bing.com`, `microsoft.com`, `yahoo.co.jp`, and `amazon.com`. SERP close-time learning is separate and uses `search:<engine>` learning roots, not domain category memory.
 
 ## Holiday Calendar Module
 
@@ -307,6 +307,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 - Deploy readiness: `extension/js/deployment-readiness.js` (pure state machine for Test / Armed / Deploy)
 - Cleanup ranking: `extension/js/cleanup-ranking.js` (pure AI Cleanup score helper)
 - Closure learner: `extension/js/closure-learner.js` (new — closure sampling, learned close-time recommendations)
+- Search result helpers: `extension/js/search-results.js` (SERP detection plus isolated `search:<engine>` learning roots)
 - Popup: `extension/js/popup.js` + `extension/popup.html` + `extension/css/popup.css` (mode toggle, memory bar, AI panel, holiday settings, closure learning UI)
 - Model transfer helpers: `scripts/export_model_bundle.sh`, `scripts/import_model_bundle.sh`
 
@@ -315,9 +316,10 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 ```bash
 node --check extension/js/holidays.js
 node --check extension/js/closure-learner.js
+node --check extension/js/search-results.js
 ```
 
-All 8 JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
+Core JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 
 ## Current Operational Notes
 
@@ -334,7 +336,7 @@ All 8 JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 - Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses median background age × 1.5 to recommend per-category learned close-after times. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Runtime cleanup multiplies the learned time by foreground/background importance and idle context, then caps it with the user-facing maximum close-after slider.
 - Added (2026-05-01): Protected tabs + foreground/background lifecycle. `getProtectedTabIds()` queries Chrome for active/pinned/audible tabs before any auto-close scan — both `performStaleCheck()` and `aiCleanup()` skip them. `lastForegroundAt` / `lastBackgroundedAt` replace `lastVisited` for stale detection (fallback for old entries). AI Cleanup scoring uses `backgroundAgeMs` + `focusRatio` for importance weighting.
 - Adjusted (2026-05-01): `snapshotAllTabs()`, tab creation, tab navigation, popup active-tab display, and AI Suggestions now preserve/use `lastBackgroundedAt` consistently. Suggestions should not count protected tabs as stale.
-- Added (2026-05-01): SERP exclusion — search engine result pages (Google, Bing, Yahoo, DuckDuckGo, Baidu, Sogou, Naver, Ecosia, Startpage, Yandex) are excluded from closure learning. These are transient navigation waypoints opened and closed in seconds; recording them pollutes per-category learned thresholds. Tabs are still tracked for display but `recordTabClosureForLearning()` returns early when the URL matches a SERP pattern. `SERP_PATTERNS` is defined in `background.js`.
+- Revised (2026-05-03): SERP tabs are no longer excluded from closure learning. Search engine result pages now classify as `search` / `Search Results` and use isolated `search:<engine>` root-domain learning buckets from `extension/js/search-results.js`, so repeated manual closes can teach aggressive SERP cleanup without polluting broad categories or unrelated Google/Bing/Yahoo pages.
 - Fixed (2026-05-01): Close-Time Learning UI in popup redesigned from chaotic `flex-wrap` rows to clean stacked cards (`cl-card`). Each category gets a header line (name + manual/auto counts + recommendation) and a detail line for foreground, background, and default close time. Removed the unused legend section.
 - Note (2026-05-01): macOS Focus sync is user-local only. Do not commit a Focus helper script, Native Messaging IPC, installer hook, or Shortcut names to the cloud repo unless the user explicitly changes that policy. If needed, document it as a private local wrapper outside the repository.
 - Updated (2026-05-01): DOMAIN_MAP expanded — `finviz.com` → finance, `oracle.com`/`microsoft.com` → work, `open.mimo.xiaomi.com` → work, `deepl.com`/`lingq.com`/`tutorialsdojo.com`/`eikaiwa.dmm.com`/`learn.microsoft.com`/`skillbuilder.aws` → reference. Reference category keywords updated to include certification/exam/translation terms.

@@ -48,8 +48,9 @@ import {
   PROACTIVE_CLEANUP_POLICY,
   shouldProactivelyCleanTab,
 } from './cleanup-ranking.js';
-import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
+import { allowsRootDomainLearning } from './domain-utils.js';
 import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary } from './closure-learner.js';
+import { getLearningRootDomain, isSearchResultPage, SEARCH_RESULTS_CATEGORY } from './search-results.js';
 import {
   classifyURL,
   connectToCompanion,
@@ -74,31 +75,6 @@ function isTrackableUrl(url) {
     && !url.startsWith('chrome-extension://')
     && !url.startsWith('about:')
     && !url.startsWith('file://');
-}
-
-/**
- * Returns true if the URL is a search engine results page (SERP).
- * SERPs are opened and closed too quickly to provide useful learning
- * data — they are transient navigation waypoints, not "real" tabs.
- * We still track them (registry, dwell, etc.) but exclude them from
- * closure learning samples.
- */
-const SERP_PATTERNS = [
-  /^https?:\/\/(www\.)?google\.[a-z.]+\/search/,
-  /^https?:\/\/(www\.)?bing\.com\/search/,
-  /^https?:\/\/search\.yahoo\./,
-  /^https?:\/\/(www\.)?duckduckgo\.com\//,
-  /^https?:\/\/(www\.)?baidu\.com\/s/,
-  /^https?:\/\/(www\.)?sogou\.com\/web/,
-  /^https?:\/\/search\.naver\.com/,
-  /^https?:\/\/(www\.)?ecosia\.org\/search/,
-  /^https?:\/\/(www\.)?startpage\.com\/sp\/search/,
-  /^https?:\/\/yandex\.[a-z.]+\/search/,
-];
-
-function isSearchResultPage(url) {
-  if (!url) return false;
-  return SERP_PATTERNS.some(re => re.test(url));
 }
 
 /**
@@ -173,8 +149,18 @@ function categoryFromDomainMemory(memoryHit) {
   };
 }
 
+function effectiveCategoryKey(entry = {}) {
+  return isSearchResultPage(entry.url) ? SEARCH_RESULTS_CATEGORY : (entry.category || DEFAULT_CATEGORY.key);
+}
+
+function effectiveLearningRootDomain(entry = {}) {
+  return isSearchResultPage(entry.url)
+    ? getLearningRootDomain(entry.url)
+    : (entry.rootDomain || getLearningRootDomain(entry.url || ''));
+}
+
 function learnedDomainThresholdFor(entry, learnedThresholds = {}) {
-  const rootDomain = entry?.rootDomain || getRootDomain(entry?.url || '');
+  const rootDomain = effectiveLearningRootDomain(entry);
   if (!allowsRootDomainLearning(rootDomain)) return null;
   const domainThreshold = learnedThresholds?.__domains?.[rootDomain];
   return typeof domainThreshold === 'number' && domainThreshold > 0
@@ -244,8 +230,8 @@ async function buildCleanupContext(settings = {}) {
 }
 
 function tabRetentionProfile(entry, settings, learnedThresholds, now = Date.now(), context = {}) {
-  const categoryKey = entry.category || 'other';
-  const rootDomain = entry.rootDomain || getRootDomain(entry.url || '');
+  const categoryKey = effectiveCategoryKey(entry);
+  const rootDomain = effectiveLearningRootDomain(entry);
   const backgroundAgeMs = closureAgeMs(entry, now);
   const importance = normalizedTabImportance(entry, backgroundAgeMs);
   const contextMultiplier = idleContextMultiplier(context);
@@ -432,16 +418,15 @@ async function getProtectedTabIds() {
 
 async function recordTabClosureForLearning(entry, type, now = Date.now()) {
   if (!entry?.url) return;
-  // Skip search engine result pages — transient navigation waypoints.
-  if (isSearchResultPage(entry.url)) return;
   // Skip blacklisted URLs — they follow fixed rules, not learned heuristics.
   const settings = await getSettings();
   if (matchBlacklist(entry.url, settings.blacklist)) return;
+  const searchResult = isSearchResultPage(entry.url);
   await recordClosureSample({
     type,
-    category: entry.category || 'other',
+    category: searchResult ? SEARCH_RESULTS_CATEGORY : (entry.category || 'other'),
     url: entry.url,
-    rootDomain: entry.rootDomain || getRootDomain(entry.url),
+    rootDomain: searchResult ? getLearningRootDomain(entry.url) : (entry.rootDomain || getLearningRootDomain(entry.url)),
     dwellMs: entry.dwellMs || 0,
     ageMs: closureAgeMs(entry, now),
     backgroundAgeMs: entry.lastBackgroundedAt ? Math.max(0, now - entry.lastBackgroundedAt) : null,
@@ -543,7 +528,7 @@ async function startActiveSession(tab, reason = 'activated') {
 
   const now = Date.now();
   const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
-  const rootDomain = getRootDomain(tab.url);
+  const rootDomain = getLearningRootDomain(tab.url);
   const prev = await getTabEntry(tab.id) || {};
   await upsertTabEntry(tab.id, {
     url: tab.url,
@@ -573,7 +558,7 @@ async function resumeActiveFocusedTab() {
 async function noteTabActivity(tab, timestamp = Date.now()) {
   if (!tab?.id || !isTrackableUrl(tab.url)) return;
   const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' }, { remember: false });
-  const rootDomain = getRootDomain(tab.url);
+  const rootDomain = getLearningRootDomain(tab.url);
   await updateTabEntry(tab.id, (entry) => ({
     ...(entry || {}),
     url: tab.url,
@@ -649,16 +634,17 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
 
   if (tab && isTrackableUrl(tab.url)) {
     const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
-    const rootDomain = getRootDomain(tab.url);
+    const rootDomain = getLearningRootDomain(tab.url);
+    const searchResult = isSearchResultPage(tab.url);
     entry = {
       ...(entry || {}),
       url: tab.url,
       title: tab.title || '',
       favIconUrl: tab.favIconUrl || entry?.favIconUrl || '',
-      category: entry?.category || cat.key,
+      category: searchResult ? SEARCH_RESULTS_CATEGORY : (entry?.category || cat.key),
       categorySource: entry?.categorySource || cat.source,
       categoryConfidence: entry?.categoryConfidence || cat.confidence,
-      rootDomain: entry?.rootDomain || rootDomain,
+      rootDomain: searchResult ? rootDomain : (entry?.rootDomain || rootDomain),
       lastVisited: entry?.lastVisited || Date.now(),
       openedAt: entry?.openedAt || Date.now(),
       dwellMs: entry?.dwellMs || 0,
@@ -686,7 +672,7 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
   }
 
   const sessionId = await findRecentlyClosedSession(entry.url);
-  const categoryKey = entry.category || 'other';
+  const categoryKey = effectiveCategoryKey(entry);
   await appendClosedRecord({
     url: entry.url,
     title: entry.title,
@@ -772,7 +758,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   if (!isTrackableUrl(tab.url)) return;
   const now = Date.now();
   const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
-  const rootDomain = getRootDomain(tab.url);
+  const rootDomain = getLearningRootDomain(tab.url);
   await upsertTabEntry(tab.id, {
     url: tab.url,
     title: tab.title || '',
@@ -802,7 +788,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     await closeActiveSession('navigation');
   }
   const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
-  const rootDomain = getRootDomain(tab.url);
+  const rootDomain = getLearningRootDomain(tab.url);
   const now = Date.now();
   const lastBackgroundedAt = tab.active
     ? null
@@ -929,7 +915,7 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
     const blacklistMatch = matchBlacklist(entry.url, settings.blacklist);
     const blacklistMaxAgeMs = blacklistMatch ? blacklistThresholdMs(blacklistMatch) : null;
 
-    const categoryKey = entry.category || 'other';
+    const categoryKey = effectiveCategoryKey(entry);
     let result;
     if (blacklistMatch) {
       const backgroundAgeMs = closureAgeMs(entry, now);
@@ -1077,7 +1063,7 @@ async function buildCleanupCandidates(settings = {}, { now = Date.now() } = {}) 
     if (whitelist.some(w => entry.url?.includes(w))) continue;
 
     const blacklistMatch = matchBlacklist(entry.url, blacklist);
-    const categoryKey = entry.category || 'other';
+    const categoryKey = effectiveCategoryKey(entry);
     const catInfo = CATEGORIES[categoryKey] || {};
     const priority = catInfo.priority ?? 50;
     const defaultThresholdMs = catInfo.maxAgeMs || DEFAULT_CATEGORY.maxAgeMs;
@@ -1279,7 +1265,7 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
       /* already closed */
     }
 
-    const categoryKey = entry.category || 'other';
+    const categoryKey = effectiveCategoryKey(entry);
     const sessionId = await findRecentlyClosedSession(entry.url);
     await appendClosedRecord({
       url: entry.url,
@@ -1569,7 +1555,7 @@ async function snapshotAllTabs() {
     const prev = existing[tab.id] || {};
     const sameUrl = prev.url === tab.url;
     const cat = await categorizeWithDomainMemory({ url: tab.url, title: tab.title || '' });
-    const rootDomain = getRootDomain(tab.url);
+    const rootDomain = getLearningRootDomain(tab.url);
     const entry = {
       url: tab.url,
       title: tab.title || '',
@@ -1791,7 +1777,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           category: cat.key,
           categorySource: cat.source,
           categoryConfidence: cat.confidence,
-          rootDomain: getRootDomain(pageUrl),
+          rootDomain: getLearningRootDomain(pageUrl),
           pageSeenAt: msg.timestamp || Date.now(),
         });
         sendResponse({ ok: true });

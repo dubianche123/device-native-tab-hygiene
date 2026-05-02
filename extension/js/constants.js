@@ -131,6 +131,13 @@ export const CATEGORIES = {
     priority: 20,
     color: '#e67e22',
   },
+  search: {
+    label: 'Search Results',
+    keywords: [],
+    maxAgeMs: 12 * 60 * 60 * 1000,      // 12 hours until learned behavior exists
+    priority: 10,
+    color: '#16a085',
+  },
   news: {
     label: 'News & Media',
     keywords: [

@@ -20,7 +20,8 @@
  */
 
 import { CATEGORIES, DEFAULT_CATEGORY, STORAGE_KEYS } from './constants.js';
-import { allowsRootDomainLearning, getRootDomain } from './domain-utils.js';
+import { allowsRootDomainLearning } from './domain-utils.js';
+import { getLearningRootDomain, SEARCH_RESULTS_CATEGORY } from './search-results.js';
 
 const MAX_SAMPLES = 2000;
 const MIN_DOMAIN_MANUAL_SAMPLES = 3; // Fast domain-level learning from repeated manual closes
@@ -73,12 +74,14 @@ function isManualClosure(type) {
 }
 
 function learnedThresholdFloor(category) {
+  if (category === SEARCH_RESULTS_CATEGORY) return SHORT_SESSION_FLOOR_MS;
   if (category === DEFAULT_CATEGORY.key) return UNCATEGORIZED_SESSION_FLOOR_MS;
   if (category === 'entertainment') return ENTERTAINMENT_SESSION_FLOOR_MS;
   return IMPORTANT_CATEGORIES.has(category) ? IMPORTANT_SESSION_FLOOR_MS : SHORT_SESSION_FLOOR_MS;
 }
 
 function requiredManualSamples(category, scope = 'domain') {
+  if (category === SEARCH_RESULTS_CATEGORY) return MIN_DOMAIN_MANUAL_SAMPLES;
   if (scope === 'category') {
     if (category === DEFAULT_CATEGORY.key) return Number.POSITIVE_INFINITY;
     if (category === 'entertainment') return 8;
@@ -108,11 +111,12 @@ export async function recordClosureSample(sample) {
   const data = await getClosureData();
   const now = Date.now();
   const type = normalizeClosureType(sample.type);
+  const rootDomain = sample.rootDomain || getLearningRootDomain(sample.url || '');
 
   data.samples.push({
     type,
     category: sample.category || 'other',
-    rootDomain: sample.rootDomain || getRootDomain(sample.url || ''),
+    rootDomain,
     dwellMs: sample.dwellMs || 0,
     ageMs: sample.ageMs || 0,
     backgroundAgeMs: sample.backgroundAgeMs ?? null,
@@ -152,7 +156,9 @@ function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key, 
   const validBackgroundSamples = b.manualBackgroundAge.filter(ms => ms >= MIN_USEFUL_SAMPLE_MS);
   const thresholdFloor = learnedThresholdFloor(defaultCategory);
   const sampleRequirement = requiredManualSamples(defaultCategory, scope);
-  const domainRequirement = scope === 'category' ? MIN_CATEGORY_MANUAL_DOMAINS : 1;
+  const domainRequirement = scope === 'category' && defaultCategory !== SEARCH_RESULTS_CATEGORY
+    ? MIN_CATEGORY_MANUAL_DOMAINS
+    : 1;
 
   let recommendedThresholdMs = null;
   let thresholdDelta = null;
@@ -247,7 +253,7 @@ export async function getCategoryClosureStats() {
       };
     }
     const b = buckets[cat];
-    const rootDomain = s.rootDomain || getRootDomain(s.url || '');
+    const rootDomain = s.rootDomain || getLearningRootDomain(s.url || '');
 
     if (isManualClosure(s.type)) {
       b.manualDwell.push(s.dwellMs);
@@ -292,7 +298,7 @@ export async function getDomainClosureStats() {
   const buckets = {};
 
   for (const s of samples) {
-    const rootDomain = s.rootDomain || getRootDomain(s.url || '');
+    const rootDomain = s.rootDomain || getLearningRootDomain(s.url || '');
     if (!rootDomain || !allowsRootDomainLearning(rootDomain)) continue;
     if (!buckets[rootDomain]) {
       buckets[rootDomain] = {

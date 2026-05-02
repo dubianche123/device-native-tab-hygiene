@@ -133,6 +133,7 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 - **Category-aware retention**: AI, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and `Other` each have their own close-time cap.
 - **Manual closure learning**: Real browser closes and popup closes become local training samples.
 - **Root-domain fallback learning**: Hard-to-classify sites can still get their own learned behavior instead of being mixed into one huge `Other` bucket.
+- **Search-result learning**: SERP tabs use their own `Search Results` category and `search:<engine>` learning buckets, so they can be reclaimed without teaching unrelated Google/Bing/Yahoo pages to close early.
 - **Holiday-aware idle predictions**: Japan and China calendars can widen or shift likely idle windows in the ML insights view.
 - **AI Cleanup**: Prioritizes reducing tab count first, then bounded memory-pressure cleanup. In Deploy mode, manual AI Clean can also proactively trim a few clearly low-value tabs even when the machine is already under target, while still ranking by learned close-time pressure, engagement, and interaction count.
 - **Transparent telemetry UI**: Memory, CPU, model readiness, closure learning, and idle-confidence state are shown directly in the popup.
@@ -140,11 +141,12 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 
 ## Category Closure Time Rules
 
-Tabs are assigned a close time from four inputs: category defaults, learned manual-close behavior, root-domain history, and per-tab importance. Root-domain history wins over broad category history whenever it exists, so one fast-closing site does not teach the whole category to close early. The Settings sliders are caps, not replacements; the model can close sooner, but it cannot keep a tab longer than the configured maximum.
+Tabs are assigned a close time from four inputs: category defaults, learned manual-close behavior, root-domain history, and per-tab importance. Root-domain history wins over broad category history whenever it exists, so one fast-closing site does not teach the whole category to close early. Search result pages are isolated into `Search Results` and `search:<engine>` buckets. The Settings sliders are caps, not replacements; the model can close sooner, but it cannot keep a tab longer than the configured maximum.
 
 | Category | Max Idle Time | Rationale |
 |----------|--------------|-----------|
 | **NSFW** | **12 hours** | Opened once, walked away. Close quickly. |
+| Search Results | 12 hours | Disposable by default, then adapts from your SERP close behavior. |
 | Social Media | 3 days | Fast-decaying value. |
 | Entertainment | 5 days | Often revisit-able but not work-critical. |
 | News | 5 days | Freshness matters. |

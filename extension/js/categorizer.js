@@ -12,6 +12,7 @@
 
 import { CATEGORIES, DEFAULT_CATEGORY, DOMAIN_MAP } from './constants.js';
 import { normalizeHostname } from './domain-utils.js';
+import { isSearchResultPage, SEARCH_RESULTS_CATEGORY } from './search-results.js';
 
 // ── Content signals for page-level classification ────────────────────
 
@@ -206,6 +207,15 @@ export function categorizeURL(url) {
   }
 
   const fullUrl = url.toLowerCase();
+
+  if (isSearchResultPage(fullUrl) && CATEGORIES[SEARCH_RESULTS_CATEGORY]) {
+    return {
+      key: SEARCH_RESULTS_CATEGORY,
+      ...CATEGORIES[SEARCH_RESULTS_CATEGORY],
+      confidence: 0.95,
+      source: 'search-results',
+    };
+  }
 
   // Very specific path patterns can override broad host rules such as
   // microsoft.com -> work.
