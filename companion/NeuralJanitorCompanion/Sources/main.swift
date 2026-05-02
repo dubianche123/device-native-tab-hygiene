@@ -1705,17 +1705,6 @@ if CommandLine.arguments.contains("--reset-learning") {
 
 writeLog("\(appName) Companion started; \(engineCodename) online (pid: \(ProcessInfo.processInfo.processIdentifier))")
 
-DispatchQueue.global(qos: .utility).async {
-    while true {
-        Thread.sleep(forTimeInterval: 24 * 60 * 60)
-        do {
-            try predictor.retrain()
-        } catch {
-            writeLog("Scheduled retraining failed: \(error)")
-        }
-    }
-}
-
 while true {
     guard let message = readMessage() else {
         writeLog("stdin closed or invalid message; exiting")

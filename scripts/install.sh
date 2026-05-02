@@ -103,7 +103,16 @@ ok "Installed binary to $BINARY_PATH"
 # ── Step 3: Register Native Messaging Host ─────────────────────────
 
 # Generate the JSON manifest
-ALLOWED_ORIGINS=$(for ext_id in "${EXTENSION_IDS[@]}"; do printf '    "chrome-extension://%s/"\n' "$ext_id"; done)
+ALLOWED_ORIGINS=""
+for ext_id in "${EXTENSION_IDS[@]}"; do
+    origin="    \"chrome-extension://$ext_id/\""
+    if [ -z "$ALLOWED_ORIGINS" ]; then
+        ALLOWED_ORIGINS="$origin"
+    else
+        ALLOWED_ORIGINS="$ALLOWED_ORIGINS,
+$origin"
+    fi
+done
 MANIFEST_JSON=$(cat <<EOF
 {
   "name": "$HOST_NAME",
