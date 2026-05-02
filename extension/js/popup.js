@@ -250,9 +250,28 @@ function faviconURL(entry) {
   return entry?.favIconUrl || null;
 }
 
-function sendMessage(msg) {
+function sendMessage(msg, timeoutMs = 3000) {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(msg, resolve);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(undefined);
+    }, timeoutMs);
+
+    try {
+      chrome.runtime.sendMessage(msg, (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(response);
+      });
+    } catch {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(undefined);
+    }
   });
 }
 
@@ -1728,15 +1747,28 @@ let mlStatusTimer = null;
 let suggestionsTimer = null;
 
 async function init() {
-  await updateStatus();
-  await updateMLStatus();
-  await loadActiveTabs();
-  await loadClosedLog();
-  await loadPredictions();
-  await loadClosureLearning();
-  await updateMemoryPressure();
-  await updateCPUUsage();
-  await updateAISuggestions();
+  await Promise.allSettled([
+    updateStatus().catch(err => {
+      console.warn('[Neural-Janitor] Status init failed:', err);
+      const text = document.getElementById('status-text');
+      if (text) text.textContent = 'Link Checking';
+    }),
+    updateMLStatus().catch(err => {
+      console.warn('[Neural-Janitor] ML init failed:', err);
+    }),
+  ]);
+
+  await Promise.allSettled([
+    loadActiveTabs(),
+    loadClosedLog(),
+    loadPredictions(),
+    loadClosureLearning(),
+    updateMemoryPressure(),
+    updateCPUUsage(),
+    updateAISuggestions(),
+  ]).catch(err => {
+    console.warn('[Neural-Janitor] Popup bootstrap failed:', err);
+  });
 
   if (!mlStatusTimer) {
     mlStatusTimer = setInterval(updateMLStatus, 5_000);
@@ -1752,4 +1784,8 @@ async function init() {
   }
 }
 
-init();
+init().catch(err => {
+  console.error('[Neural-Janitor] Popup init failed:', err);
+  const text = document.getElementById('status-text');
+  if (text) text.textContent = 'Link Checking';
+});

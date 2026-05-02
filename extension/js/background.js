@@ -606,6 +606,75 @@ async function findRecentlyClosedSession(url) {
   return match?.tab?.sessionId || null;
 }
 
+async function getRecentlyClosedSessions(maxResults = 50) {
+  return chrome.sessions.getRecentlyClosed({ maxResults }).catch(() => []);
+}
+
+async function reconcileRestoredSessionTabs() {
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  const sessions = await getRecentlyClosedSessions(100);
+  const now = Date.now();
+  const restoreWindowMs = 15 * 60 * 1000;
+  const usedSessionIds = new Set();
+  const closedRecords = Object.entries(await getClosedLog()).flatMap(([category, entries]) =>
+    (Array.isArray(entries) ? entries : []).map(entry => ({ category, ...entry }))
+  );
+
+  let restoredCount = 0;
+  let removedSampleCount = 0;
+
+  for (const tab of tabs) {
+    if (!isTrackableUrl(tab.url)) continue;
+
+    const candidates = sessions
+      .filter(session =>
+        session?.tab?.url === tab.url
+        && session?.sessionId
+        && !usedSessionIds.has(session.sessionId)
+        && typeof session.lastModified === 'number'
+        && now - session.lastModified <= restoreWindowMs
+      )
+      .sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+
+    if (candidates.length === 0) continue;
+
+    const session = candidates[0];
+    usedSessionIds.add(session.sessionId);
+    restoredCount++;
+
+    const closedRecord = closedRecords.find(entry => entry.sessionId && entry.sessionId === session.sessionId)
+      || closedRecords.find(entry =>
+        entry.url === tab.url
+        && typeof entry.closedAt === 'number'
+        && Math.abs(entry.closedAt - session.lastModified) <= 2 * 60 * 1000
+      );
+
+    if (closedRecord) {
+      await markClosedRecordRestored(closedRecord.category, closedRecord.id).catch(() => false);
+      const sampleType = isAutoClosedRecord(closedRecord) ? 'auto_cleanup' : 'manual_popup_close';
+      const removal = await removeClosureSamplesForClosedRecord({
+        closedRecordId: closedRecord.id,
+        url: closedRecord.url,
+        closedAt: closedRecord.closedAt,
+        type: sampleType,
+      }).catch(() => ({ removedCount: 0 }));
+      removedSampleCount += removal.removedCount || 0;
+      continue;
+    }
+
+    const removal = await removeClosureSamplesForClosedRecord({
+      url: tab.url,
+      closedAt: session.lastModified,
+      type: 'manual_browser_close',
+    }).catch(() => ({ removedCount: 0 }));
+    removedSampleCount += removal.removedCount || 0;
+  }
+
+  if (restoredCount > 0 || removedSampleCount > 0) {
+    console.log(`[Neural-Janitor] Reconciled ${restoredCount} restored startup tab(s); removed ${removedSampleCount} learning sample(s).`);
+  }
+}
+
 async function restoreClosedTab({ category, id, url, sessionId }) {
   const record = await getClosedRecord(category, id);
   let restored = null;
@@ -734,24 +803,24 @@ async function closeTrackedTab(tabId, reason = 'manual_popup_close') {
 // INSTALLATION & STARTUP
 // ══════════════════════════════════════════════════════════════════════
 
-chrome.runtime.onInstalled.addListener(async () => {
-  console.log('[Neural-Janitor] Extension installed; initialising tab registry');
+async function bootstrapBrowserState(source = 'startup') {
+  console.log(`[Neural-Janitor] Browser ${source}; initialising tab registry`);
   await snapshotAllTabs();
+  await reconcileRestoredSessionTabs().catch(() => {});
   setupAlarms();
   connectToCompanion();
   await syncClosureLearningToCompanion().catch(() => {});
   requestPredictions();
   await resumeActiveFocusedTab();
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  await bootstrapBrowserState('installed');
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   console.log('[Neural-Janitor] Browser started; resuming');
-  await snapshotAllTabs();
-  setupAlarms();
-  connectToCompanion();
-  await syncClosureLearningToCompanion().catch(() => {});
-  requestPredictions();
-  await resumeActiveFocusedTab();
+  await bootstrapBrowserState('startup');
 });
 
 // ══════════════════════════════════════════════════════════════════════
