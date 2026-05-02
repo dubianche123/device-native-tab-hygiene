@@ -181,6 +181,378 @@ final class ActivityStore {
     }
 }
 
+// MARK: - Closure Learning Store
+
+private let closureMultiPartSuffixes: Set<String> = [
+    "ac.jp", "co.jp", "ed.jp", "go.jp", "gr.jp", "lg.jp", "ne.jp", "or.jp",
+    "com.cn", "edu.cn", "gov.cn", "net.cn", "org.cn",
+    "com.hk", "edu.hk", "gov.hk", "net.hk", "org.hk",
+    "co.uk", "ac.uk", "gov.uk", "org.uk",
+    "com.au", "edu.au", "gov.au", "net.au", "org.au",
+    "co.kr", "or.kr", "go.kr",
+    "co.nz", "com.sg", "com.tw",
+]
+
+private let closureBroadServiceRoots: Set<String> = [
+    "google.com",
+    "bing.com",
+    "microsoft.com",
+    "yahoo.com",
+    "yahoo.co.jp",
+    "amazon.com",
+    "apple.com",
+    "baidu.com",
+    "tencent.com",
+    "alibaba.com",
+    "rakuten.co.jp",
+    "dmm.com",
+    "github.io",
+    "cloudfront.net",
+]
+
+private let closureManualTypes: Set<String> = [
+    "manual_browser_close",
+    "manual_popup_close",
+]
+
+private let closureValidTypes: Set<String> = [
+    "manual_browser_close",
+    "manual_popup_close",
+    "auto_cleanup",
+]
+
+private let closureMaxSamples = 2000
+
+private func normalizeClosureType(_ raw: String?) -> String {
+    guard let raw, closureValidTypes.contains(raw) else { return "manual_browser_close" }
+    return raw
+}
+
+private func normalizeBrowserType(_ raw: String?) -> String {
+    let value = (raw ?? "").lowercased()
+    if value == "edge" || value == "chrome" || value == "safari" { return value }
+    return "unknown"
+}
+
+private func isManualClosureType(_ raw: String) -> Bool {
+    closureManualTypes.contains(raw)
+}
+
+private func normalizeClosureHostname(_ input: String) -> String {
+    guard !input.isEmpty else { return "" }
+    if let url = URL(string: input), let host = url.host {
+        return host.lowercased().replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression)
+    }
+    let stripped = input.lowercased()
+        .replacingOccurrences(of: "^https?://", with: "", options: .regularExpression)
+    let host = stripped.split(separator: "/").first.map(String.init) ?? stripped
+    return host.replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression)
+}
+
+private func closureRootDomain(for input: String) -> String {
+    let hostname = normalizeClosureHostname(input)
+    guard !hostname.isEmpty, hostname != "localhost" else { return hostname }
+    if hostname.range(of: #"^\d{1,3}(\.\d{1,3}){3}$"#, options: .regularExpression) != nil {
+        return hostname
+    }
+
+    let parts = hostname.split(separator: ".").map(String.init).filter { !$0.isEmpty }
+    guard parts.count > 2 else { return hostname }
+
+    let lastTwo = parts.suffix(2).joined(separator: ".")
+    if closureMultiPartSuffixes.contains(lastTwo), parts.count >= 3 {
+        return parts.suffix(3).joined(separator: ".")
+    }
+
+    return lastTwo
+}
+
+private func allowsClosureRootDomainLearning(_ input: String) -> Bool {
+    let rootDomain = closureRootDomain(for: input)
+    return !rootDomain.isEmpty && !closureBroadServiceRoots.contains(rootDomain)
+}
+
+private func closureDouble(_ value: Any?) -> Double? {
+    if let doubleValue = value as? Double { return doubleValue }
+    if let numberValue = value as? NSNumber { return numberValue.doubleValue }
+    if let stringValue = value as? String { return Double(stringValue) }
+    return nil
+}
+
+private func closureString(_ value: Any?) -> String? {
+    if let stringValue = value as? String { return stringValue }
+    if let numberValue = value as? NSNumber { return numberValue.stringValue }
+    return nil
+}
+
+private struct ClosureSample: Codable {
+    let sampleId: String
+    let type: String
+    let category: String
+    let rootDomain: String
+    let browserType: String
+    let url: String
+    let closedRecordId: String?
+    let dwellMs: Double
+    let ageMs: Double
+    let backgroundAgeMs: Double?
+    let interactions: Int
+    let openedAt: Double
+    let lastVisited: Double
+    let lastBackgroundedAt: Double?
+    let closedAt: Double
+    let hourOfDay: Int
+    let weight: Double
+
+    init(
+        sampleId: String,
+        type: String,
+        category: String,
+        rootDomain: String,
+        browserType: String,
+        url: String,
+        closedRecordId: String?,
+        dwellMs: Double,
+        ageMs: Double,
+        backgroundAgeMs: Double?,
+        interactions: Int,
+        openedAt: Double,
+        lastVisited: Double,
+        lastBackgroundedAt: Double?,
+        closedAt: Double,
+        hourOfDay: Int,
+        weight: Double
+    ) {
+        self.sampleId = sampleId
+        self.type = type
+        self.category = category
+        self.rootDomain = rootDomain
+        self.browserType = browserType
+        self.url = url
+        self.closedRecordId = closedRecordId
+        self.dwellMs = dwellMs
+        self.ageMs = ageMs
+        self.backgroundAgeMs = backgroundAgeMs
+        self.interactions = interactions
+        self.openedAt = openedAt
+        self.lastVisited = lastVisited
+        self.lastBackgroundedAt = lastBackgroundedAt
+        self.closedAt = closedAt
+        self.hourOfDay = hourOfDay
+        self.weight = weight
+    }
+
+    private static func makeSampleID(
+        type: String,
+        category: String,
+        rootDomain: String,
+        browserType: String,
+        url: String,
+        closedRecordId: String?,
+        closedAt: Double,
+        openedAt: Double,
+        lastVisited: Double,
+        lastBackgroundedAt: Double?,
+        dwellMs: Double,
+        ageMs: Double,
+        interactions: Int
+    ) -> String {
+        let bg = lastBackgroundedAt ?? 0
+        return [
+            type,
+            category,
+            rootDomain,
+            browserType,
+            closedRecordId ?? "",
+            String(format: "%.0f", closedAt),
+            String(format: "%.0f", openedAt),
+            String(format: "%.0f", lastVisited),
+            String(format: "%.0f", bg),
+            String(format: "%.0f", dwellMs),
+            String(format: "%.0f", ageMs),
+            String(interactions),
+            url,
+        ].joined(separator: "|")
+    }
+
+    init(dictionary: [String: Any], browserTypeDefault: String = "unknown") {
+        let type = normalizeClosureType(closureString(dictionary["type"]))
+        let url = closureString(dictionary["url"]) ?? ""
+        let rootDomain = closureString(dictionary["rootDomain"]) ?? closureRootDomain(for: url)
+        let browserType = normalizeBrowserType(closureString(dictionary["browserType"]) ?? browserTypeDefault)
+        let closedAt = closureDouble(dictionary["closedAt"]) ?? Date().timeIntervalSince1970 * 1000.0
+        let openedAt = closureDouble(dictionary["openedAt"]) ?? closedAt
+        let lastVisited = closureDouble(dictionary["lastVisited"]) ?? closedAt
+        let lastBackgroundedAt = closureDouble(dictionary["lastBackgroundedAt"])
+        let closedRecordId = closureString(dictionary["closedRecordId"])
+        let dwellMs = closureDouble(dictionary["dwellMs"]) ?? 0
+        let ageMs = closureDouble(dictionary["ageMs"]) ?? 0
+        let backgroundAgeMs = closureDouble(dictionary["backgroundAgeMs"])
+        let interactions = intFromJSON(dictionary["interactions"]) ?? 0
+        let sampleId = closureString(dictionary["sampleId"]) ?? ClosureSample.makeSampleID(
+            type: type,
+            category: closureString(dictionary["category"]) ?? "other",
+            rootDomain: rootDomain,
+            browserType: browserType,
+            url: url,
+            closedRecordId: closedRecordId,
+            closedAt: closedAt,
+            openedAt: openedAt,
+            lastVisited: lastVisited,
+            lastBackgroundedAt: lastBackgroundedAt,
+            dwellMs: dwellMs,
+            ageMs: ageMs,
+            interactions: interactions
+        )
+        let hourOfDay = intFromJSON(dictionary["hourOfDay"]) ?? Calendar.current.component(.hour, from: Date(timeIntervalSince1970: closedAt / 1000.0))
+        let weight = closureDouble(dictionary["weight"]) ?? (isManualClosureType(type) ? 1.0 : 0.2)
+
+        self.init(
+            sampleId: sampleId,
+            type: type,
+            category: closureString(dictionary["category"]) ?? "other",
+            rootDomain: rootDomain,
+            browserType: browserType,
+            url: url,
+            closedRecordId: closedRecordId,
+            dwellMs: dwellMs,
+            ageMs: ageMs,
+            backgroundAgeMs: backgroundAgeMs,
+            interactions: interactions,
+            openedAt: openedAt,
+            lastVisited: lastVisited,
+            lastBackgroundedAt: lastBackgroundedAt,
+            closedAt: closedAt,
+            hourOfDay: hourOfDay,
+            weight: weight
+        )
+    }
+}
+
+private final class ClosureLearningStore {
+    private let fileURL: URL
+    private let lock = NSLock()
+    private var samples: [ClosureSample] = []
+    private var sampleIDs: Set<String> = []
+
+    init() {
+        fileURL = appSupportDir.appendingPathComponent("closure_samples.json")
+        load()
+    }
+
+    func add(_ incoming: [ClosureSample]) -> Int {
+        guard !incoming.isEmpty else { return 0 }
+        var imported = 0
+        lock.lock()
+        for sample in incoming {
+            guard !sampleIDs.contains(sample.sampleId) else { continue }
+            samples.append(sample)
+            sampleIDs.insert(sample.sampleId)
+            imported += 1
+        }
+        trimIfNeededLocked()
+        let snapshot = samples
+        lock.unlock()
+        if imported > 0 { save(snapshot) }
+        return imported
+    }
+
+    func all() -> [ClosureSample] {
+        lock.lock()
+        let snapshot = samples
+        lock.unlock()
+        return snapshot
+    }
+
+    func remove(closedRecordId: String? = nil, url: String? = nil, closedAt: Double? = nil, type: String = "auto_cleanup") -> Int {
+        let normalizedType = normalizeClosureType(type)
+        let targetRoot = closureRootDomain(for: url ?? "")
+        let targetClosedAt = closedAt ?? 0
+        var removedCount = 0
+        var fallbackRemoved = false
+
+        lock.lock()
+        samples = samples.filter { sample in
+            guard sample.type == normalizedType else { return true }
+
+            if let closedRecordId, sample.closedRecordId == closedRecordId {
+                removedCount += 1
+                sampleIDs.remove(sample.sampleId)
+                return false
+            }
+
+            let legacyTimeMatch = targetClosedAt > 0
+                && abs(sample.closedAt - targetClosedAt) <= 2 * 60 * 1000
+            let legacyUrlMatch = (url?.isEmpty == false) && sample.url == url
+            let legacyRootMatch = !targetRoot.isEmpty && sample.rootDomain == targetRoot
+            if !fallbackRemoved && removedCount == 0 && legacyTimeMatch && (legacyUrlMatch || legacyRootMatch) {
+                fallbackRemoved = true
+                removedCount += 1
+                sampleIDs.remove(sample.sampleId)
+                return false
+            }
+
+            return true
+        }
+        let snapshot = samples
+        lock.unlock()
+        if removedCount > 0 { save(snapshot) }
+        return removedCount
+    }
+
+    func reset() {
+        lock.lock()
+        samples = []
+        sampleIDs = []
+        lock.unlock()
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: fileURL),
+              let loaded = try? JSONDecoder().decode([ClosureSample].self, from: data) else { return }
+        lock.lock()
+        samples = loaded
+        sampleIDs = Set(loaded.map(\.sampleId))
+        trimIfNeededLocked()
+        let snapshot = samples
+        lock.unlock()
+        save(snapshot)
+    }
+
+    private func trimIfNeededLocked() {
+        guard samples.count > closureMaxSamples else { return }
+        let overflow = samples.count - closureMaxSamples
+        let removed = samples.prefix(overflow)
+        for sample in removed {
+            sampleIDs.remove(sample.sampleId)
+        }
+        samples = Array(samples.suffix(closureMaxSamples))
+    }
+
+    private func save(_ snapshot: [ClosureSample]) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: fileURL, options: .atomic)
+    }
+}
+
+private func closureBrowserCounts(from samples: [ClosureSample]) -> [String: Int] {
+    var counts: [String: Int] = [:]
+    for sample in samples {
+        let key = sample.browserType.isEmpty ? "unknown" : sample.browserType
+        counts[key, default: 0] += 1
+    }
+    return counts
+}
+
+private func closureSamplesPayload(from samples: [ClosureSample]) -> [[String: Any]] {
+    guard let data = try? JSONEncoder().encode(samples),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+        return []
+    }
+    return payload
+}
+
 // MARK: - Idle Prediction Engine
 
 struct IdlePrediction {
@@ -1320,12 +1692,14 @@ func holidayLevelMap(from value: Any?) -> [Int: Int] {
 }
 
 let store = ActivityStore()
+private let closureStore = ClosureLearningStore()
 let predictor = IdlePredictor(store: store)
 let pageClassifier = LocalPageClassifier()
 
 if CommandLine.arguments.contains("--reset-learning") {
     predictor.resetLearningArtifacts(writeSentinel: true)
-    print("[Neural-Janitor] Reset local learning artifacts and queued browser-state reset")
+    closureStore.reset()
+    print("[Neural-Janitor] Reset local learning artifacts, closure learning, and queued browser-state reset")
     exit(EXIT_SUCCESS)
 }
 
@@ -1350,6 +1724,93 @@ while true {
 
     let type = message["type"] as? String ?? ""
     switch type {
+    case "recordClosureSample":
+        if let sampleDict = message["sample"] as? [String: Any] {
+            let imported = closureStore.add([ClosureSample(dictionary: sampleDict)])
+            let samples = closureStore.all()
+            writeMessage([
+                "type": "recordClosureSampleResult",
+                "protocolVersion": ipcProtocolVersion,
+                "appName": appName,
+                "engineCodename": engineCodename,
+                "ok": true,
+                "importedCount": imported,
+                "totalSamples": samples.count,
+                "browserCounts": closureBrowserCounts(from: samples),
+            ])
+        } else {
+            writeMessage([
+                "type": "recordClosureSampleResult",
+                "protocolVersion": ipcProtocolVersion,
+                "appName": appName,
+                "engineCodename": engineCodename,
+                "ok": false,
+                "error": "Missing sample payload",
+            ])
+        }
+
+    case "recordClosureSamples":
+        let rawSamples = message["samples"] as? [[String: Any]] ?? []
+        let imported = closureStore.add(rawSamples.map { ClosureSample(dictionary: $0) })
+        let samples = closureStore.all()
+        writeMessage([
+            "type": "recordClosureSamplesResult",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
+            "ok": true,
+            "importedCount": imported,
+            "totalSamples": samples.count,
+            "browserCounts": closureBrowserCounts(from: samples),
+        ])
+
+    case "getClosureLearning", "getClosureSamples", "getGlobalStats":
+        let samples = closureStore.all()
+        writeMessage([
+            "type": "closureLearning",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
+            "ok": true,
+            "samples": closureSamplesPayload(from: samples),
+            "totalSamples": samples.count,
+            "browserCounts": closureBrowserCounts(from: samples),
+        ])
+
+    case "removeClosureSamplesForClosedRecord":
+        let closedRecordId = message["closedRecordId"] as? String
+        let url = message["url"] as? String
+        let closedAt = closureDouble(message["closedAt"])
+        let type = (message["recordType"] as? String) ?? "auto_cleanup"
+        let removedCount = closureStore.remove(
+            closedRecordId: closedRecordId,
+            url: url,
+            closedAt: closedAt,
+            type: type
+        )
+        let samples = closureStore.all()
+        writeMessage([
+            "type": "removeClosureSamplesForClosedRecordResult",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
+            "ok": true,
+            "removedCount": removedCount,
+            "totalSamples": samples.count,
+            "browserCounts": closureBrowserCounts(from: samples),
+        ])
+
+    case "resetClosureLearning":
+        closureStore.reset()
+        writeMessage([
+            "type": "resetClosureLearningResult",
+            "protocolVersion": ipcProtocolVersion,
+            "appName": appName,
+            "engineCodename": engineCodename,
+            "ok": true,
+            "resetApplied": true,
+        ])
+
     case "activity":
         if let timestamp = message["timestamp"] as? Double {
             store.add(ActivityEvent(
@@ -1437,6 +1898,7 @@ while true {
 
     case "resetLearningState":
         predictor.resetLearningArtifacts(writeSentinel: false)
+        closureStore.reset()
         writeMessage([
             "type": "resetLearningStateResult",
             "protocolVersion": ipcProtocolVersion,

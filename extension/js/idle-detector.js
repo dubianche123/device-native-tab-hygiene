@@ -107,6 +107,11 @@ function sendToCompanion(message) {
   return queued;
 }
 
+export async function sendCompanionRequest(message) {
+  if (!nativePort) connectToCompanion();
+  return sendToCompanion(message);
+}
+
 function handleCompanionMessage(msg) {
   if (msg.type === 'idlePredictions') {
     setIdlePredictions(msg.predictions);

@@ -1,6 +1,6 @@
 # Neural-Janitor Agent Handoff
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03
 
 ## Identity
 
@@ -190,7 +190,7 @@ Closed records are stored by category under `closedLog` in `chrome.storage.local
 - Batch restore sends `restoreClosedTabs` with selected restorable `{ category, id, url, sessionId }` entries.
 - Closed-log cleanup sends `removeClosedRecords` for any selected records, including records already marked `restoredAt`, or `clearRestoredClosedRecords` to remove all restored entries.
 - Background restores sequentially via `chrome.sessions.restore(sessionId)` when possible, then falls back to `chrome.tabs.create({ url })`, and marks each successful record with `restoredAt`.
-- Restoring an automatically closed record is corrective feedback: `restoreClosedTab()` removes the linked `auto_cleanup` closure-learning sample via `closedRecordId`, with a legacy root/time fallback for older samples.
+- Restoring an automatically closed record is corrective feedback: `restoreClosedTab()` removes the linked `auto_cleanup` closure-learning sample from the shared companion store via `closedRecordId`, with a legacy root/time fallback for older samples.
 
 ## Protected Tabs & Foreground/Background Lifecycle
 
@@ -263,7 +263,7 @@ Training samples: the popup displays real `trainingSamples` from the companion. 
 
 ## Closure Learning
 
-Learns from HOW the user closes tabs to dynamically adjust per-category and per-root-domain learned close-after times. Three data streams:
+Learns from HOW the user closes tabs to dynamically adjust per-category and per-root-domain learned close-after times. The source of truth now lives in the companion so Chrome and Edge share the same closure database; browser storage only keeps a temporary pending queue when the companion is unavailable. Three data streams:
 
 | Type | Source | Learning weight |
 |---|---|---|
@@ -271,9 +271,9 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 | `manual_popup_close` | Extension popup "Close & Log" button | 1.0 (full) |
 | `auto_cleanup` | `performStaleCheck()` or `aiCleanup()` | Context only; stored with weight 0.2 |
 
-**Storage**: `closureLearning` key in `chrome.storage.local`. Rolling window of up to 2000 samples.
+**Storage**: `closure_samples.json` in the companion app support directory. Browser `closureLearning` storage is only a temporary pending queue for unsynced samples and retryable removals. Rolling window of up to 2000 samples.
 
-**Per-sample fields**: `type`, `category`, `rootDomain`, `dwellMs` (foreground dwell), `backgroundAgeMs` (time since tab left foreground), `interactions`, `openedAt`, `lastVisited`, `lastBackgroundedAt`, `closedAt`, `hourOfDay`.
+**Per-sample fields**: `sampleId`, `browserType`, `type`, `category`, `rootDomain`, `dwellMs` (foreground dwell), `backgroundAgeMs` (time since tab left foreground), `interactions`, `openedAt`, `lastVisited`, `lastBackgroundedAt`, `closedAt`, `hourOfDay`.
 
 **Learned close-time recommendation algorithm**:
 1. Collect manual close `backgroundAgeMs` values per category and per root domain (time since tab left foreground).
@@ -295,7 +295,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 
 **Entertainment guardrail**: `entertainment` now needs more manual samples and has a higher minimum learned floor, so a few short closes cannot collapse it to a 2-3 minute retention window.
 
-**Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `getLearnedThresholds`, `getCategoryClosureStats`, `getDomainClosureStats`, `getLearningSummary`, `resetClosureLearning`.
+**Module**: `extension/js/closure-learner.js` — exports `recordClosureSample`, `syncClosureLearningToCompanion`, `getLearnedThresholds`, `getCategoryClosureStats`, `getDomainClosureStats`, `getLearningSummary`, `resetClosureLearning`.
 
 ## Important Paths (new/changed)
 
@@ -334,7 +334,7 @@ Core JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 - DOMAIN_MAP hostname suffixes are matched right-to-left (longest suffix wins). Add new sites there first; only add to CATEGORIES keywords as a fallback.
 - URL paths are never matched against generic category keywords — this is intentional to prevent false positives. Keep path exceptions narrow and explicit.
 - Finalized (2026-05-01): IPC logic is synced for protocol version 2, including per-day `holidayLevels` for prediction requests. Hardware telemetry markers map cleanly to the popup UI components, and the NPU-disconnect scenario is handled with clearly labeled browser heuristic estimates. Categorizer v2 with DOMAIN_MAP-first architecture, holiday calendars, test/deploy mode, memory pressure + AI cleanup, and AI suggestions panel are implemented and syntax-verified.
-- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events. Uses median background age × 1.5 to recommend per-category learned close-after times. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Runtime cleanup multiplies the learned time by foreground/background importance and idle context, then caps it with the user-facing maximum close-after slider.
+- Added (2026-05-01): Closure learning system — `closure-learner.js` records manual_browser_close, manual_popup_close, and auto_cleanup events, then syncs them into the companion's shared `closure_samples.json`. Uses median background age × 1.5 to recommend per-category learned close-after times. Programmatic closes are suppressed from `tabs.onRemoved` manual learning, and auto_cleanup is context-only to avoid self-reinforcement. Runtime cleanup multiplies the learned time by foreground/background importance and idle context, then caps it with the user-facing maximum close-after slider.
 - Added (2026-05-01): Protected tabs + foreground/background lifecycle. `getProtectedTabIds()` queries Chrome for active/pinned/audible tabs before any auto-close scan — both `performStaleCheck()` and `aiCleanup()` skip them. `lastForegroundAt` / `lastBackgroundedAt` replace `lastVisited` for stale detection (fallback for old entries). AI Cleanup scoring uses `backgroundAgeMs` + `focusRatio` for importance weighting.
 - Adjusted (2026-05-01): `snapshotAllTabs()`, tab creation, tab navigation, popup active-tab display, and AI Suggestions now preserve/use `lastBackgroundedAt` consistently. Suggestions should not count protected tabs as stale.
 - Revised (2026-05-03): SERP tabs are no longer excluded from closure learning. Search engine result pages now classify as `search` / `Search Results` and use isolated `search:<engine>` root-domain learning buckets from `extension/js/search-results.js`, so repeated manual closes can teach aggressive SERP cleanup without polluting broad categories or unrelated Google/Bing/Yahoo pages.

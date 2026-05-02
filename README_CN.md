@@ -131,7 +131,7 @@ flowchart TB
 - **Test / Armed / Deploy 模式**：Test 只做预览并锁住 AI Clean；Armed 会保持 Test 行为，等学习数据达标后自动切到 Deploy；Deploy 允许 idle 放行后的定时清理和 AI Clean 真正关闭标签页并写入日志。
 - **安全默认**：新安装默认先处于 Test。数据严重不足时 Deploy 会锁住；有早期关闭时间学习后可以先 Armed；达到 readiness 目标后才会真正 Deploy。
 - **按类别保留**：AI、工作、金融、邮箱、参考、社交、娱乐、购物、新闻、NSFW 和 `Other` 都有自己的关闭上限。
-- **手动关闭学习**：真实浏览器关闭和 Popup 里的关闭行为都会变成本地训练样本。
+- **共享关闭学习**：真实浏览器关闭和 Popup 里的关闭行为会同步进 companion，让 Chrome 和 Edge 共用同一份关闭学习数据库。浏览器本地只保留很小的离线暂存队列。
 - **根域名兜底学习**：难以分类的网站也能按根域名学到自己的行为，不会全挤进一个巨大的 `Other` 桶。
 - **搜索结果学习**：搜索结果页会进入单独的 `Search Results` 类别和 `search:<engine>` 学习桶，可以被回收，但不会教坏 Google/Bing/Yahoo 下的其他页面。
 - **节假日感知的闲置预测**：可接入日本和中国日历，在 ML Insights 里调整可能的闲置窗口。

@@ -22,6 +22,8 @@
 import { CATEGORIES, DEFAULT_CATEGORY, STORAGE_KEYS } from './constants.js';
 import { allowsRootDomainLearning } from './domain-utils.js';
 import { getLearningRootDomain, SEARCH_RESULTS_CATEGORY } from './search-results.js';
+import { getSettings } from './storage.js';
+import { sendCompanionRequest } from './idle-detector.js';
 
 const MAX_SAMPLES = 2000;
 const MIN_DOMAIN_MANUAL_SAMPLES = 3; // Fast domain-level learning from repeated manual closes
@@ -40,13 +42,267 @@ const IMPORTANT_CATEGORIES = new Set(['ai', 'work', 'email', 'reference', 'finan
 
 // ── Storage access ────────────────────────────────────────────────────
 
-export async function getClosureData() {
-  const data = await chrome.storage.local.get(STORAGE_KEYS.CLOSURE_LEARNING);
-  return data[STORAGE_KEYS.CLOSURE_LEARNING] || { samples: [] };
+const LOCAL_PENDING_KEY = STORAGE_KEYS.CLOSURE_LEARNING;
+
+function currentBrowserType() {
+  const ua = typeof navigator !== 'undefined' ? String(navigator.userAgent || '') : '';
+  if (/Edg\//i.test(ua)) return 'edge';
+  if (/Chrome\//i.test(ua)) return 'chrome';
+  if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) return 'safari';
+  return 'other';
 }
 
-async function setClosureData(data) {
-  await chrome.storage.local.set({ [STORAGE_KEYS.CLOSURE_LEARNING]: data });
+function normalizeBrowserType(browserType = '', fallback = 'unknown') {
+  const value = String(browserType || '').toLowerCase();
+  if (value === 'edge' || value === 'chrome' || value === 'safari') return value;
+  return fallback;
+}
+
+function closureSampleSignature(sample = {}, browserType = currentBrowserType()) {
+  return [
+    sample.type || 'manual_browser_close',
+    sample.category || 'other',
+    sample.rootDomain || getLearningRootDomain(sample.url || ''),
+    normalizeBrowserType(sample.browserType || browserType),
+    sample.closedRecordId || '',
+    Math.round(Number(sample.closedAt) || 0),
+    Math.round(Number(sample.openedAt) || 0),
+    Math.round(Number(sample.lastVisited) || 0),
+    Math.round(Number(sample.lastBackgroundedAt) || 0),
+    Math.round(Number(sample.dwellMs) || 0),
+    Math.round(Number(sample.ageMs) || 0),
+    Math.round(Number(sample.interactions) || 0),
+    sample.url || '',
+  ].join('|');
+}
+
+function normalizeClosureSample(sample = {}, browserType = currentBrowserType()) {
+  const now = Date.now();
+  const type = normalizeClosureType(sample.type);
+  const closedAt = Number(sample.closedAt) || now;
+  const rootDomain = sample.rootDomain || getLearningRootDomain(sample.url || '');
+  const resolvedBrowserType = normalizeBrowserType(sample.browserType || browserType, browserType);
+  const sampleId = String(sample.sampleId || closureSampleSignature(sample, resolvedBrowserType));
+
+  return {
+    sampleId,
+    type,
+    category: sample.category || 'other',
+    rootDomain,
+    browserType: resolvedBrowserType,
+    url: sample.url || '',
+    closedRecordId: sample.closedRecordId || null,
+    dwellMs: Number(sample.dwellMs) || 0,
+    ageMs: Number(sample.ageMs) || 0,
+    backgroundAgeMs: sample.backgroundAgeMs ?? null,
+    interactions: Number(sample.interactions) || 0,
+    openedAt: Number(sample.openedAt) || now,
+    lastVisited: Number(sample.lastVisited) || now,
+    lastBackgroundedAt: sample.lastBackgroundedAt ?? null,
+    closedAt,
+    hourOfDay: new Date(closedAt).getHours(),
+    weight: isManualClosure(type) ? 1 : AUTO_CLEANUP_WEIGHT,
+  };
+}
+
+function normalizeClosureSamples(samples = [], browserType = 'unknown') {
+  return (Array.isArray(samples) ? samples : [])
+    .map(sample => normalizeClosureSample(sample, browserType))
+    .filter(sample => sample.sampleId);
+}
+
+function normalizePendingRemoval(removal = {}) {
+  const closedRecordId = removal.closedRecordId || null;
+  const url = removal.url || '';
+  const closedAt = Number(removal.closedAt) || 0;
+  const type = normalizeClosureType(removal.type || 'auto_cleanup');
+  const requestId = removal.requestId || [
+    closedRecordId || '',
+    url || '',
+    Math.round(closedAt),
+    type,
+  ].join('|');
+
+  return {
+    requestId,
+    closedRecordId,
+    url,
+    closedAt,
+    type,
+  };
+}
+
+function closureSampleMatchesRemoval(sample = {}, removal = {}) {
+  if (!sample || !removal) return false;
+  if (removal.closedRecordId && sample.closedRecordId && sample.closedRecordId === removal.closedRecordId) {
+    return true;
+  }
+  if (normalizeClosureType(sample.type) !== normalizeClosureType(removal.type || 'auto_cleanup')) {
+    return false;
+  }
+
+  const targetRoot = getLearningRootDomain(removal.url || '');
+  const targetClosedAt = Number(removal.closedAt) || 0;
+  const legacyTimeMatch = targetClosedAt > 0
+    && Math.abs((Number(sample.closedAt) || 0) - targetClosedAt) <= 2 * 60 * 1000;
+  const legacyUrlMatch = Boolean(removal.url) && sample.url === removal.url;
+  const legacyRootMatch = Boolean(targetRoot) && sample.rootDomain === targetRoot;
+  return legacyTimeMatch && (legacyUrlMatch || legacyRootMatch);
+}
+
+async function getPendingClosureData() {
+  const data = await chrome.storage.local.get(LOCAL_PENDING_KEY);
+  const pending = data[LOCAL_PENDING_KEY];
+  if (!pending || typeof pending !== 'object') return { samples: [], removals: [] };
+  const samples = normalizeClosureSamples(pending.samples || [], currentBrowserType());
+  const removals = (Array.isArray(pending.removals) ? pending.removals : [])
+    .map(normalizePendingRemoval);
+  const sampleChanged = (pending.samples || []).length !== samples.length
+    || (pending.samples || []).some((sample, index) => sample?.sampleId !== samples[index]?.sampleId);
+  const removalChanged = (pending.removals || []).length !== removals.length
+    || (pending.removals || []).some((removal, index) => removal?.requestId !== removals[index]?.requestId);
+  if (sampleChanged || removalChanged) {
+    await chrome.storage.local.set({ [LOCAL_PENDING_KEY]: { samples, removals } });
+  }
+  return { ...pending, samples, removals };
+}
+
+async function setPendingClosureData(data) {
+  const samples = normalizeClosureSamples(data?.samples || [], currentBrowserType());
+  const removals = (Array.isArray(data?.removals) ? data.removals : [])
+    .map(normalizePendingRemoval);
+  await chrome.storage.local.set({ [LOCAL_PENDING_KEY]: { samples, removals } });
+}
+
+async function clearPendingClosureData() {
+  await chrome.storage.local.remove(LOCAL_PENDING_KEY);
+}
+
+async function getCompanionClosureSamples() {
+  try {
+    const response = await sendCompanionRequest({ type: 'getClosureLearning' });
+    if (Array.isArray(response?.samples)) {
+      return {
+        samples: normalizeClosureSamples(response.samples, 'unknown'),
+        totalSamples: response.totalSamples ?? response.samples.length,
+        browserCounts: response.browserCounts || {},
+      };
+    }
+  } catch {
+    // Companion unavailable; fall back to local pending queue.
+  }
+  return null;
+}
+
+async function isCompanionEnabled() {
+  const settings = await getSettings().catch(() => null);
+  return settings?.useCompanion !== false;
+}
+
+export async function syncClosureLearningToCompanion() {
+  if (!(await isCompanionEnabled())) return { ok: false, skipped: true };
+  const pending = await getPendingClosureData();
+  const samples = pending.samples || [];
+  const removals = pending.removals || [];
+  let remainingRemovals = [...removals];
+
+  try {
+    for (const removal of removals) {
+      const response = await sendCompanionRequest({
+        type: 'removeClosureSamplesForClosedRecord',
+        closedRecordId: removal.closedRecordId,
+        url: removal.url,
+        closedAt: removal.closedAt,
+        recordType: removal.type,
+      });
+      if (response?.ok) {
+        remainingRemovals = remainingRemovals.filter(item => item.requestId !== removal.requestId);
+      } else {
+        break;
+      }
+    }
+
+    let syncedCount = 0;
+    let totalCount = samples.length;
+    if (samples.length > 0) {
+      const response = await sendCompanionRequest({ type: 'recordClosureSamples', samples });
+      if (response?.ok) {
+        syncedCount = response.importedCount ?? samples.length;
+        totalCount = response.totalSamples ?? samples.length;
+      } else {
+        await setPendingClosureData({ samples, removals: remainingRemovals });
+        return { ok: false, syncedCount: 0, removalCount: removals.length - remainingRemovals.length };
+      }
+    }
+
+    if (remainingRemovals.length === 0) {
+      await clearPendingClosureData();
+    } else {
+      await setPendingClosureData({ samples: [], removals: remainingRemovals });
+    }
+    return {
+      ok: true,
+      syncedCount,
+      totalCount,
+      removalCount: removals.length - remainingRemovals.length,
+    };
+  } catch {
+    // Leave local pending data intact so we can retry later.
+  }
+
+  return { ok: false, syncedCount: 0 };
+}
+
+export async function getClosureData() {
+  if (await isCompanionEnabled()) {
+    await syncClosureLearningToCompanion();
+    const remote = await getCompanionClosureSamples();
+    const pending = await getPendingClosureData();
+    const removalQueue = pending.removals || [];
+    const pendingSamples = removalQueue.length > 0
+      ? pending.samples.filter(sample => !removalQueue.some(removal => closureSampleMatchesRemoval(sample, removal)))
+      : pending.samples;
+    if (remote) {
+      const remoteSamples = removalQueue.length > 0
+        ? remote.samples.filter(sample => !removalQueue.some(removal => closureSampleMatchesRemoval(sample, removal)))
+        : remote.samples;
+      const mergedMap = new Map();
+      for (const sample of [...remoteSamples, ...pendingSamples]) {
+        const key = sample.sampleId || closureSampleSignature(sample);
+        if (!mergedMap.has(key)) {
+          mergedMap.set(key, sample);
+        }
+      }
+      const merged = [...mergedMap.values()];
+      const browserCounts = {};
+      for (const sample of merged) {
+        const key = normalizeBrowserType(sample.browserType || 'unknown');
+        browserCounts[key] = (browserCounts[key] || 0) + 1;
+      }
+      return {
+        samples: merged,
+        totalSamples: merged.length,
+        browserCounts,
+      };
+    }
+  }
+
+  const pending = await getPendingClosureData();
+  const removalQueue = pending.removals || [];
+  const pendingSamples = removalQueue.length > 0
+    ? pending.samples.filter(sample => !removalQueue.some(removal => closureSampleMatchesRemoval(sample, removal)))
+    : pending.samples;
+  const browserCounts = {};
+  for (const sample of pendingSamples) {
+    const key = normalizeBrowserType(sample.browserType || 'unknown');
+    browserCounts[key] = (browserCounts[key] || 0) + 1;
+  }
+  return {
+    ...pending,
+    samples: pendingSamples,
+    totalSamples: pendingSamples.length,
+    browserCounts,
+  };
 }
 
 // ── Stat helpers ──────────────────────────────────────────────────────
@@ -110,49 +366,50 @@ function requiredManualSamples(category, scope = 'domain') {
  * @param {number} [sample.closedAt] - timestamp when the closure happened
  */
 export async function recordClosureSample(sample) {
-  const data = await getClosureData();
-  const now = Date.now();
-  const type = normalizeClosureType(sample.type);
-  const rootDomain = sample.rootDomain || getLearningRootDomain(sample.url || '');
-  const closedAt = sample.closedAt || now;
+  const normalized = normalizeClosureSample(sample);
 
-  data.samples.push({
-    type,
-    category: sample.category || 'other',
-    rootDomain,
-    url: sample.url || '',
-    closedRecordId: sample.closedRecordId || null,
-    dwellMs: sample.dwellMs || 0,
-    ageMs: sample.ageMs || 0,
-    backgroundAgeMs: sample.backgroundAgeMs ?? null,
-    interactions: sample.interactions || 0,
-    openedAt: sample.openedAt || now,
-    lastVisited: sample.lastVisited || now,
-    lastBackgroundedAt: sample.lastBackgroundedAt || null,
-    closedAt,
-    hourOfDay: new Date(closedAt).getHours(),
-    weight: isManualClosure(type) ? 1 : AUTO_CLEANUP_WEIGHT,
-  });
-
-  // Rolling window cap
-  if (data.samples.length > MAX_SAMPLES) {
-    data.samples = data.samples.slice(-MAX_SAMPLES);
+  if (await isCompanionEnabled()) {
+    try {
+      const response = await sendCompanionRequest({ type: 'recordClosureSample', sample: normalized });
+      if (response?.ok) {
+        return { ok: true, sample: normalized, source: 'companion' };
+      }
+    } catch {
+      // Fall through to local pending storage.
+    }
   }
 
-  await setClosureData(data);
-  return sample;
+  const data = await getPendingClosureData();
+  const existing = data.samples || [];
+  const removals = data.removals || [];
+  const next = [...existing.filter(item => item.sampleId !== normalized.sampleId), normalized];
+  const capped = next.length > MAX_SAMPLES ? next.slice(-MAX_SAMPLES) : next;
+  await setPendingClosureData({ samples: capped, removals });
+  return { ok: true, sample: normalized, source: 'local-pending' };
 }
 
 export async function removeClosureSamplesForClosedRecord({ closedRecordId, url, closedAt, type = 'auto_cleanup' } = {}) {
-  const data = await getClosureData();
+  const normalizedType = normalizeClosureType(type);
+  const data = await getPendingClosureData();
   const samples = data.samples || [];
+  const removals = data.removals || [];
   const targetRoot = getLearningRootDomain(url || '');
   const targetClosedAt = Number(closedAt) || 0;
   let removedCount = 0;
   let fallbackRemoved = false;
+  const nextRemoval = normalizePendingRemoval({
+    closedRecordId,
+    url,
+    closedAt: targetClosedAt,
+    type: normalizedType,
+  });
+  const nextRemovals = [
+    ...removals.filter(item => item.requestId !== nextRemoval.requestId),
+    nextRemoval,
+  ];
 
   data.samples = samples.filter(sample => {
-    if (normalizeClosureType(sample.type) !== type) return true;
+    if (normalizeClosureType(sample.type) !== normalizedType) return true;
 
     if (closedRecordId && sample.closedRecordId === closedRecordId) {
       removedCount++;
@@ -171,9 +428,27 @@ export async function removeClosureSamplesForClosedRecord({ closedRecordId, url,
 
     return true;
   });
+  await setPendingClosureData({ samples: data.samples, removals: nextRemovals });
 
-  if (removedCount > 0) {
-    await setClosureData(data);
+  if (await isCompanionEnabled()) {
+    try {
+      const response = await sendCompanionRequest({
+        type: 'removeClosureSamplesForClosedRecord',
+        closedRecordId,
+        url,
+        closedAt,
+        recordType: normalizedType,
+      });
+      if (response?.ok) {
+        removedCount += response.removedCount;
+        await setPendingClosureData({
+          samples: data.samples,
+          removals: nextRemovals.filter(item => item.requestId !== nextRemoval.requestId),
+        });
+      }
+    } catch {
+      // Keep local removal even if the companion is offline.
+    }
   }
 
   return { ok: true, removedCount };
@@ -415,6 +690,7 @@ export async function getLearnedThresholds() {
 export async function getLearningSummary() {
   const data = await getClosureData();
   const samples = data.samples || [];
+  const browserCounts = data.browserCounts || {};
   const stats = await getCategoryClosureStats();
   const domainStats = await getDomainClosureStats();
 
@@ -441,6 +717,7 @@ export async function getLearningSummary() {
     trackedBuckets: Object.keys(stats).length + Object.keys(domainStats).length,
     stats,
     domainStats,
+    browserCounts,
   };
 }
 
@@ -448,5 +725,12 @@ export async function getLearningSummary() {
  * Reset all closure learning data.
  */
 export async function resetClosureLearning() {
-  await chrome.storage.local.remove(STORAGE_KEYS.CLOSURE_LEARNING);
+  if (await isCompanionEnabled()) {
+    try {
+      await sendCompanionRequest({ type: 'resetClosureLearning' });
+    } catch {
+      // Fall back to local cleanup below.
+    }
+  }
+  await clearPendingClosureData();
 }

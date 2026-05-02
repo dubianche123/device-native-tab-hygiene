@@ -55,6 +55,7 @@ import {
   getLearnedThresholds,
   getCategoryClosureStats,
   getLearningSummary,
+  syncClosureLearningToCompanion,
 } from './closure-learner.js';
 import { getLearningRootDomain, isSearchResultPage, SEARCH_RESULTS_CATEGORY } from './search-results.js';
 import {
@@ -738,6 +739,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await snapshotAllTabs();
   setupAlarms();
   connectToCompanion();
+  await syncClosureLearningToCompanion().catch(() => {});
   requestPredictions();
   await resumeActiveFocusedTab();
 });
@@ -747,6 +749,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await snapshotAllTabs();
   setupAlarms();
   connectToCompanion();
+  await syncClosureLearningToCompanion().catch(() => {});
   requestPredictions();
   await resumeActiveFocusedTab();
 });
@@ -779,7 +782,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
   } else if (alarm.name === 'nj-companion-sync') {
     const settings = await getSettings();
-    if (settings.useCompanion !== false) await requestPredictions();
+    if (settings.useCompanion !== false) {
+      await syncClosureLearningToCompanion().catch(() => {});
+      await requestPredictions();
+    }
   } else if (alarm.name === 'nj-session-checkpoint') {
     await checkpointActiveSession();
   }

@@ -131,7 +131,7 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 - **Test / Armed / Deploy modes**: Test mode is preview-only and locks AI Clean. Armed mode keeps Test behavior until learning is ready, then automatically enables Deploy. Deploy lets idle-approved scheduled cleanup and AI Clean close tabs and write to the closed-tab log.
 - **Safe default**: Fresh installs start in Test mode. Deploy is locked while data is severely insufficient, can be armed once early close-time learning exists, and only activates when the readiness target is met.
 - **Category-aware retention**: AI, work, finance, email, reference, social, entertainment, shopping, news, NSFW, and `Other` each have their own close-time cap.
-- **Manual closure learning**: Real browser closes and popup closes become local training samples.
+- **Shared closure learning**: Real browser closes and popup closes sync into the companion so Chrome and Edge learn from the same closure database. The browser only keeps a tiny pending queue when the companion is offline.
 - **Root-domain fallback learning**: Hard-to-classify sites can still get their own learned behavior instead of being mixed into one huge `Other` bucket.
 - **Search-result learning**: SERP tabs use their own `Search Results` category and `search:<engine>` learning buckets, so they can be reclaimed without teaching unrelated Google/Bing/Yahoo pages to close early.
 - **Holiday-aware idle predictions**: Japan and China calendars can widen or shift likely idle windows in the ML insights view.
