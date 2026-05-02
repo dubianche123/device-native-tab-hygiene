@@ -187,8 +187,8 @@ Setting: `deploymentMode` (`test` / `armed` / `deploy`, default `test`). `testMo
 
 Closed records are stored by category under `closedLog` in `chrome.storage.local`. The popup supports both single restore and checkbox-based batch restore:
 - Single restore sends `restoreClosedTab`.
-- Batch restore sends `restoreClosedTabs` with selected `{ category, id, url, sessionId }` entries.
-- Closed-log cleanup sends `removeClosedRecords` for selected records, or `clearRestoredClosedRecords` to remove restored entries.
+- Batch restore sends `restoreClosedTabs` with selected restorable `{ category, id, url, sessionId }` entries.
+- Closed-log cleanup sends `removeClosedRecords` for any selected records, including records already marked `restoredAt`, or `clearRestoredClosedRecords` to remove all restored entries.
 - Background restores sequentially via `chrome.sessions.restore(sessionId)` when possible, then falls back to `chrome.tabs.create({ url })`, and marks each successful record with `restoredAt`.
 
 ## Protected Tabs & Foreground/Background Lifecycle
@@ -228,7 +228,7 @@ The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an au
 
 **Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a very compact model/thread label such as `M3 8T`; keep it short or the popup header will overflow. Color: green (<60%), orange (60–80%), red (≥80%). The status row also shows a compact `Pkg ~xW` estimate derived from CPU telemetry; exact macOS package watts require privileged `powermetrics`, so do not label this as an exact sensor readout.
 
-**AI Cleanup button** (🤖, popup header): Locked in Test / Armed; only Deploy can actually clean. Sends `aiCleanup` message to background with `profile` (`safe` or `broad`). Scoring:
+**AI Cleanup button** (popup header): Locked in Test / Armed; only Deploy can actually clean. Header button sends `profile: "pressure"` and reduces tab/memory pressure toward configured targets. Suggestion-card buttons send bounded trim profiles: `safe` closes at most `SAFE_CLEANUP_POLICY.maxCount` and `broad` closes at most `PROACTIVE_CLEANUP_POLICY.maxCount`. Scoring:
 ```
 score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 14 - min(90, backgroundAgeMs / effectiveClosureTime × 80) - learnedShortness × 24
 ```
@@ -237,7 +237,7 @@ score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 1
 - `effectiveClosureTime` already includes the normalized foreground/background importance multiplier when a learned manual threshold exists, then applies the user's closure time limit.
 - **Protected tabs** (active in any window, pinned, audible) are skipped entirely — see below.
 - High-priority categories such as AI/work are only a weak bias now; long idle time lowers the score, low engagement lowers the score, and interactions raise it.
-- Tab count is the primary stop condition for pressure-driven cleanup. If tab count starts above `aiCleanupTargetTabs`, cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily. When Deploy is active and the user manually presses AI Clean, the button can still proactively trim up to 2 safe tabs or 5 broader tabs, depending on the selected profile.
+- Tab count is the primary stop condition for pressure-driven cleanup. If tab count starts above `aiCleanupTargetTabs`, pressure cleanup stops once that target is reached even if memory pressure has not immediately fallen. If only memory pressure is high, pressure cleanup is bounded to 5 tabs because Chromium/macOS may reclaim memory lazily. Safe/broad suggestion trims are always capped by their policy max counts, even when tab or memory pressure is active.
 
 **Settings**:
 - `aiCleanupTargetMemory` — target memory % after cleanup (default 70%).

@@ -1212,20 +1212,32 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
     };
   }
 
-  const profileKey = profile === 'safe' ? 'safe' : 'broad';
+  const profileKey = profile === 'safe' ? 'safe' : (profile === 'pressure' ? 'pressure' : 'broad');
   const profilePolicy = profileKey === 'safe' ? SAFE_CLEANUP_POLICY : PROACTIVE_CLEANUP_POLICY;
   const profileField = profileKey === 'safe' ? 'safeEligible' : 'broadEligible';
   const tabPressureActive = tabCount > targetTabs;
   const memoryPressureActive = mem.percent > targetMemory;
-  const proactiveCandidates = manualSource
+  const trimProfile = manualSource && profileKey !== 'pressure';
+  const trimCandidates = trimProfile
     ? candidates.filter(c => c[profileField]).slice(0, profilePolicy.maxCount)
     : [];
-  const canProactivelyClean = manualSource
-    && !tabPressureActive
-    && !memoryPressureActive
-    && proactiveCandidates.length > 0;
+  const canTrim = trimProfile && trimCandidates.length > 0;
 
-  if (!canProactivelyClean && !tabPressureActive && !memoryPressureActive) {
+  if (trimProfile && !canTrim) {
+    return {
+      ok: true,
+      action: 'none',
+      cleanupMode: `${profileKey}_trim`,
+      cleanupProfile: profileKey,
+      deploymentMode,
+      memoryBefore: mem.percent,
+      tabCountBefore: tabCount,
+      closedCount: 0,
+      message: 'No low-importance tabs matched this cleanup profile',
+    };
+  }
+
+  if (!canTrim && !tabPressureActive && !memoryPressureActive) {
     return {
       ok: true,
       action: 'none',
@@ -1243,13 +1255,13 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
   let currentMem = mem.percent;
   let currentCount = tabCount;
   const memoryOnlyCloseLimit = tabPressureActive ? Number.POSITIVE_INFINITY : 5;
-  const selectedCandidates = canProactivelyClean ? proactiveCandidates : candidates;
-  const cleanupMode = canProactivelyClean ? `${profileKey}_trim` : 'targeted';
+  const selectedCandidates = canTrim ? trimCandidates : candidates;
+  const cleanupMode = canTrim ? `${profileKey}_trim` : 'targeted';
 
   for (const { tabId, entry, backgroundAgeMs } of selectedCandidates) {
     // Tab count is the primary control target. Memory pressure often does not
     // drop immediately after tab closure, so memory-only cleanup is bounded.
-    if (!canProactivelyClean) {
+    if (!canTrim) {
       if (tabPressureActive) {
         if (currentCount <= targetTabs) break;
       } else if (currentMem <= targetMemory || closedTabs.length >= memoryOnlyCloseLimit) {
@@ -1289,7 +1301,7 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
     closedTabs.push({ url: entry.url, title: entry.title });
 
     // Re-check memory after every 5 closures
-    if (!canProactivelyClean && closedTabs.length % 5 === 0) {
+    if (!canTrim && closedTabs.length % 5 === 0) {
       const freshMem = await getMemoryPressure();
       currentMem = freshMem.percent;
     }
@@ -1442,7 +1454,7 @@ async function getAISuggestion() {
     cleanupActions.push({ action: 'aiCleanupBroad', label: broadButtonLabel });
   }
   if (pressureCleanupNeeded && broadTrimCount === 0) {
-    cleanupActions.push({ action: 'aiCleanupBroad', label: tabCount > targetTabs ? '📑 Reduce tabs' : '🧹 Reduce pressure' });
+    cleanupActions.push({ action: 'aiCleanupPressure', label: tabCount > targetTabs ? '📑 Reduce tabs' : '🧹 Reduce pressure' });
   }
   if (staleCount > 0) {
     cleanupActions.push({ action: 'forceCheck', label: `🔍 Review ${staleCount}` });

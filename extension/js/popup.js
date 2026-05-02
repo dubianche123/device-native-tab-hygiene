@@ -721,12 +721,13 @@ function updateClosedRestoreControls() {
   const selectAll = document.getElementById('closed-select-all');
   const checkboxes = [...document.querySelectorAll('.closed-select')];
   const selectedVisible = checkboxes.filter(input => input.checked).length;
-  const restorableVisible = checkboxes.length;
+  const visibleCount = checkboxes.length;
+  const selectedRestorable = checkboxes.filter(input => input.checked && input.dataset.restored !== 'true').length;
 
   if (btn) {
-    btn.disabled = closedSelection.size === 0;
-    btn.textContent = closedSelection.size > 0
-      ? `Restore selected (${closedSelection.size})`
+    btn.disabled = selectedRestorable === 0;
+    btn.textContent = selectedRestorable > 0
+      ? `Restore selected (${selectedRestorable})`
       : 'Restore selected';
   }
 
@@ -738,19 +739,19 @@ function updateClosedRestoreControls() {
   }
 
   if (selectAll) {
-    selectAll.disabled = restorableVisible === 0;
-    selectAll.checked = restorableVisible > 0 && selectedVisible === restorableVisible;
-    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < restorableVisible;
+    selectAll.disabled = visibleCount === 0;
+    selectAll.checked = visibleCount > 0 && selectedVisible === visibleCount;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleCount;
   }
 }
 
-async function selectedClosedItemsFromLog() {
+async function selectedClosedItemsFromLog({ restorableOnly = false } = {}) {
   const closedLog = await sendMessage({ type: 'getClosedLog' }) || {};
   const selected = [];
 
   for (const [category, entries] of Object.entries(closedLog)) {
     for (const entry of entries || []) {
-      if (entry.restoredAt) continue;
+      if (restorableOnly && entry.restoredAt) continue;
       const key = closedSelectionKey(category, entry.id);
       if (!closedSelection.has(key)) continue;
       selected.push({
@@ -774,6 +775,10 @@ async function loadClosedLog() {
     for (const entry of entries) {
       allEntries.push({ ...entry, category });
     }
+  }
+  const validSelectionKeys = new Set(allEntries.map(entry => closedSelectionKey(entry.category, entry.id)));
+  for (const key of [...closedSelection]) {
+    if (!validSelectionKeys.has(key)) closedSelection.delete(key);
   }
   allEntries.sort((a, b) => b.closedAt - a.closedAt);
 
@@ -817,13 +822,10 @@ async function loadClosedLog() {
     const favicon = faviconURL(entry);
     const restored = Boolean(entry.restoredAt);
     const selectionKey = closedSelectionKey(entry.category, entry.id);
-    if (restored) closedSelection.delete(selectionKey);
 
     return `
       <div class="tab-item">
-        ${restored
-          ? '<span class="tab-item__select-placeholder"></span>'
-          : `<input class="closed-select" type="checkbox" data-key="${escapeHTML(selectionKey)}" data-cat="${escapeHTML(entry.category)}" data-id="${escapeHTML(entry.id)}" data-url="${escapeHTML(entry.url)}" data-session-id="${escapeHTML(entry.sessionId || '')}" ${closedSelection.has(selectionKey) ? 'checked' : ''} aria-label="Select closed tab for restore">`}
+        <input class="closed-select" type="checkbox" data-key="${escapeHTML(selectionKey)}" data-cat="${escapeHTML(entry.category)}" data-id="${escapeHTML(entry.id)}" data-url="${escapeHTML(entry.url)}" data-session-id="${escapeHTML(entry.sessionId || '')}" data-restored="${restored ? 'true' : 'false'}" ${closedSelection.has(selectionKey) ? 'checked' : ''} aria-label="Select closed-log record">
         ${favicon
           ? `<img class="tab-item__favicon" src="${escapeHTML(favicon)}" onerror="this.outerHTML='<div class=\\'tab-item__favicon tab-item__favicon--fallback\\'>🌐</div>'">`
           : '<div class="tab-item__favicon tab-item__favicon--fallback">🌐</div>'}
@@ -888,7 +890,7 @@ document.getElementById('closed-select-all').addEventListener('change', (event) 
 
 document.getElementById('btn-restore-selected').addEventListener('click', async () => {
   const btn = document.getElementById('btn-restore-selected');
-  const items = await selectedClosedItemsFromLog();
+  const items = await selectedClosedItemsFromLog({ restorableOnly: true });
   if (items.length === 0) {
     closedSelection.clear();
     updateClosedRestoreControls();
@@ -1599,7 +1601,7 @@ document.getElementById('btn-ai-cleanup')?.addEventListener('click', async () =>
   btn.textContent = '⏳ Cleaning…';
 
   try {
-    const result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'broad' });
+    const result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'pressure' });
     if (result?.ok) {
       if (result.action === 'none') {
         btn.textContent = '✅ At target';
@@ -1653,6 +1655,7 @@ async function updateAISuggestions() {
   const actionLabel = {
     aiCleanupSafe: '🧊 Clean safest',
     aiCleanupBroad: '🧹 Clean more',
+    aiCleanupPressure: '📑 Reduce tabs',
     aiCleanup: '🧹 Clean',
     forceCheck: '🔍 Review',
     armDeploy: '⏳ Arm',
@@ -1684,6 +1687,8 @@ async function updateAISuggestions() {
         let result = null;
         if (action === 'aiCleanupSafe') {
           result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'safe' });
+        } else if (action === 'aiCleanupPressure') {
+          result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'pressure' });
         } else if (action === 'aiCleanupBroad' || action === 'aiCleanup') {
           result = await sendMessage({ type: 'aiCleanup', source: 'manual', profile: 'broad' });
         } else if (action === 'forceCheck') {

@@ -275,7 +275,7 @@ Neural-Janitor 的学习成果保存在：
 ## 弹窗怎么用
 
 - **Check**：立刻预览 stale 标签页并打标，不会关闭任何页面。
-- **AI Clean**：根据标签页数量、内存压力、重要度和白名单规则决定清理什么。
+- **AI Clean**：顶部按钮用于把标签页数量或内存压力压回目标；AI Suggestions 里的 `Clean safest` / `Clean more` 是单独限量的小批量清理。
 - **MEM / CPU**：显示当前内存压力、CPU 占用，以及简短的 CPU 型号 / 线程数。
 - **ML Insights**：显示未来七天的闲置窗口，包含工作日、周末或节假日标签。
 - **Settings**：控制是否使用伴随程序、日历选择、关闭时间上限、白名单、定时黑名单和 AI Cleanup 目标。
