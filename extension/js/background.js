@@ -1323,12 +1323,13 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
 
   const profileKey = profile === 'safe' ? 'safe' : (profile === 'pressure' ? 'pressure' : 'broad');
   const profilePolicy = profileKey === 'safe' ? SAFE_CLEANUP_POLICY : PROACTIVE_CLEANUP_POLICY;
-  const profileField = profileKey === 'safe' ? 'safeEligible' : 'broadEligible';
   const tabPressureActive = tabCount > targetTabs;
   const memoryPressureActive = mem.percent > targetMemory;
   const trimProfile = manualSource && profileKey !== 'pressure';
   const trimCandidates = trimProfile
-    ? candidates.filter(c => c[profileField]).slice(0, profilePolicy.maxCount)
+    ? (profileKey === 'safe'
+      ? safeTrimCandidatesFromRanked(candidates)
+      : rankedLowImportanceCandidates(candidates).slice(0, profilePolicy.maxCount))
     : [];
   const canTrim = trimProfile && trimCandidates.length > 0;
 
@@ -1461,6 +1462,16 @@ function uniqueSuggestionActions(actions = []) {
   });
 }
 
+function rankedLowImportanceCandidates(candidates = []) {
+  return candidates.filter(candidate => candidate.broadEligible && !candidate.retention?.stale);
+}
+
+function safeTrimCandidatesFromRanked(candidates = []) {
+  const strictSafe = candidates.filter(candidate => candidate.safeEligible && !candidate.retention?.stale);
+  const ranked = rankedLowImportanceCandidates(candidates);
+  return (strictSafe.length > 0 ? strictSafe : ranked).slice(0, SAFE_CLEANUP_POLICY.maxCount);
+}
+
 async function getAISuggestion() {
   let settings = await getSettings();
   const mem = await getMemoryPressure();
@@ -1476,7 +1487,7 @@ async function getAISuggestion() {
 
   const suggestions = [];
   const cleanupActionsEnabled = deployStatus.mode === DEPLOYMENT_MODES.DEPLOY;
-  const { candidates, retentionContext } = await buildCleanupCandidates(settings, { now });
+  const { candidates } = await buildCleanupCandidates(settings, { now });
   const staleCount = candidates.filter(candidate => candidate.retention.stale).length;
   const safeTrimCount = candidates.filter(candidate => candidate.safeEligible && !candidate.retention.stale).length;
   const broadTrimCount = candidates.filter(candidate => candidate.broadEligible && !candidate.retention.stale).length;
@@ -1519,79 +1530,86 @@ async function getAISuggestion() {
     });
   }
 
-  const cleanupSignals = [];
-  const cleanupLevels = [];
-  const cleanupActions = [];
+  const pressureSignals = [];
+  const pressureLevels = [];
   let pressureCleanupNeeded = false;
 
   if (tabCount > targetTabs * 2) {
-    cleanupSignals.push(`${tabCount} tabs, over 2x target ${targetTabs}`);
-    cleanupLevels.push('warning');
+    pressureSignals.push(`${tabCount} tabs / target ${targetTabs}`);
+    pressureLevels.push('warning');
     pressureCleanupNeeded = true;
   } else if (tabCount > targetTabs) {
-    cleanupSignals.push(`${tabCount} tabs, target ${targetTabs}`);
-    cleanupLevels.push('info');
+    pressureSignals.push(`${tabCount} tabs / target ${targetTabs}`);
+    pressureLevels.push('info');
     pressureCleanupNeeded = true;
   }
 
   if (mem.percent >= forceThreshold) {
-    cleanupSignals.push(`MEM ${mem.percent}%, over force threshold ${forceThreshold}%`);
-    cleanupLevels.push('critical');
+    pressureSignals.push(`MEM ${mem.percent}% / force ${forceThreshold}%`);
+    pressureLevels.push('critical');
     pressureCleanupNeeded = true;
   } else if (mem.percent >= targetMem + 10) {
-    cleanupSignals.push(`MEM ${mem.percent}%, target ${targetMem}%`);
-    cleanupLevels.push('warning');
+    pressureSignals.push(`MEM ${mem.percent}% / target ${targetMem}%`);
+    pressureLevels.push('warning');
     pressureCleanupNeeded = true;
   } else if (mem.percent >= targetMem) {
-    cleanupSignals.push(`MEM ${mem.percent}%, slightly above ${targetMem}%`);
-    cleanupLevels.push('info');
+    pressureSignals.push(`MEM ${mem.percent}% / target ${targetMem}%`);
+    pressureLevels.push('info');
   }
 
-  if (staleCount > 0) {
-    cleanupSignals.push(`${staleCount} stale tab(s) need review`);
-    cleanupLevels.push('info');
-  }
-
-  if (broadTrimCount > 0) {
-    cleanupSignals.push(`${broadTrimCount} low-importance tab(s) ranked for trim`);
-    cleanupLevels.push('info');
-    const safeButtonLabel = `🧊 Clean safest ${Math.max(1, Math.min(safeTrimCount || broadTrimCount, SAFE_CLEANUP_POLICY.maxCount))}`;
-    const broadButtonLabel = `🧹 Clean more ${Math.max(1, Math.min(broadTrimCount, PROACTIVE_CLEANUP_POLICY.maxCount))}`;
-    if (safeTrimCount > 0) {
-      cleanupActions.push({ action: 'aiCleanupSafe', label: safeButtonLabel });
-    }
-    cleanupActions.push({ action: 'aiCleanupBroad', label: broadButtonLabel });
-  }
-  if (pressureCleanupNeeded && broadTrimCount === 0) {
-    cleanupActions.push({ action: 'aiCleanupPressure', label: tabCount > targetTabs ? '📑 Reduce tabs' : '🧹 Reduce pressure' });
-  }
-  if (staleCount > 0) {
-    cleanupActions.push({ action: 'forceCheck', label: `🔍 Review ${staleCount}` });
-  }
-
-  if (cleanupSignals.length > 0) {
-    const level = strongestSuggestionLevel(cleanupLevels);
-    const locked = !cleanupActionsEnabled;
-    const textParts = [
-      cleanupSignals.join(' · '),
-    ];
-    if (locked) {
-      textParts.push(`AI Clean is locked in ${deployStatus.mode}; Test/Armed only learns and previews.`);
-    } else if (tabCount > targetTabs || mem.percent >= targetMem) {
-      textParts.push('Cleanup will rank tabs by learned close time, background age, focus ratio, category, and tag protection; memory may lag after tabs close.');
-    } else if (safeTrimCount > 0) {
-      textParts.push(`${safeTrimCount} are the safest first cut; Clean more includes lower-confidence candidates.`);
-    } else if (retentionContext.currentlyIdle !== true && staleCount > 0) {
-      textParts.push('Check reviews stale tabs now; automatic stale closure still waits for Mac idle.');
+  if (pressureSignals.length > 0) {
+    const level = strongestSuggestionLevel(pressureLevels);
+    const actions = [];
+    const textParts = [pressureSignals.join(' · ')];
+    if (!cleanupActionsEnabled) {
+      textParts.push(`Cleanup is locked in ${deployStatus.mode}; Test/Armed only learns and previews.`);
+    } else if (broadTrimCount > 0) {
+      textParts.push(`Use the cleanup card below to choose a small safe trim or a broader trim.`);
     } else {
-      textParts.push('Review or trim from the same decision card.');
+      textParts.push('No low-importance candidates are ready yet.');
+      if (pressureCleanupNeeded) {
+        actions.push({ action: 'aiCleanupPressure', label: tabCount > targetTabs ? '📑 Reduce tabs' : '🧹 Reduce pressure' });
+      }
     }
 
     suggestions.push({
       level,
-      icon: locked ? '🔒' : (level === 'critical' ? '🔴' : '🧹'),
+      icon: !cleanupActionsEnabled ? '🔒' : (level === 'critical' ? '🔴' : '📊'),
       text: textParts.join(' '),
-      actions: cleanupActionsEnabled ? uniqueSuggestionActions(cleanupActions) : [],
+      actions: cleanupActionsEnabled ? uniqueSuggestionActions(actions) : [],
+    });
+  }
+
+  if (staleCount > 0) {
+    suggestions.push({
+      level: 'info',
+      icon: '🔍',
+      text: `${staleCount} stale tab(s) exceeded learned close time. Preview tags them now; auto-close still waits for Mac idle.`,
+      actions: [{ action: 'forceCheck', label: `🔍 Preview ${staleCount}` }],
+    });
+  }
+
+  if (broadTrimCount > 0) {
+    const safeActionCount = Math.max(1, Math.min(safeTrimCount || broadTrimCount, SAFE_CLEANUP_POLICY.maxCount));
+    const broadActionCount = Math.max(1, Math.min(broadTrimCount, PROACTIVE_CLEANUP_POLICY.maxCount));
+    const safeButtonLabel = `🧊 Clean safest ${safeActionCount}`;
+    const broadButtonLabel = `🧹 Clean more ${broadActionCount}`;
+    const textParts = [
+      `${broadTrimCount} low-importance tab(s) ranked.`,
+      `Clean safest closes up to ${safeActionCount}; Clean more closes up to ${broadActionCount}.`,
+    ];
+    if (!cleanupActionsEnabled) {
+      textParts.push(`Deploy is required before tabs can close.`);
+    }
+
+    suggestions.push({
+      level: pressureCleanupNeeded ? 'warning' : 'info',
+      icon: cleanupActionsEnabled ? '🧹' : '🔒',
+      text: textParts.join(' '),
+      actions: cleanupActionsEnabled ? [
+        { action: 'aiCleanupSafe', label: safeButtonLabel },
+        { action: 'aiCleanupBroad', label: broadButtonLabel },
+      ] : [],
     });
   }
 

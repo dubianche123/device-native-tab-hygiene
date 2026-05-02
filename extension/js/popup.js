@@ -619,22 +619,22 @@ document.getElementById('btn-settings').addEventListener('click', () => {
   }
 });
 
-// ── Force Check ──────────────────────────────────────────────────────
+// ── Manual Preview ───────────────────────────────────────────────────
 
 document.getElementById('btn-force-check').addEventListener('click', async () => {
   const btn = document.getElementById('btn-force-check');
   const statusText = document.getElementById('status-text');
   btn.disabled = true;
-  btn.textContent = 'Checking';
+  btn.textContent = 'Previewing';
   const response = await sendMessage({ type: 'forceCheck' });
   const tagged = response?.taggedCount || 0;
   const stale = response?.staleCount || response?.wouldCloseCount || tagged || 0;
-  btn.textContent = stale > 0 ? `Found ${stale}` : 'Checked';
+  btn.textContent = stale > 0 ? `Found ${stale}` : 'Previewed';
   statusText.textContent = response?.disabled
     ? 'Auto-cleanup is disabled'
     : tagged > 0
-      ? `Checked ${response?.scannedCount ?? 0}, flagged ${tagged}; no tabs closed`
-      : `Checked ${response?.scannedCount ?? 0}; no tabs closed`;
+      ? `Previewed ${response?.scannedCount ?? 0}, flagged ${tagged}; no tabs closed`
+      : `Previewed ${response?.scannedCount ?? 0}; no tabs closed`;
   await loadActiveTabs();
   await loadClosedLog();
   await loadClosureLearning();
@@ -643,7 +643,7 @@ document.getElementById('btn-force-check').addEventListener('click', async () =>
   await updateAISuggestions();
   setTimeout(() => {
     btn.disabled = false;
-    btn.textContent = 'Check';
+    btn.textContent = 'Preview';
     updateStatus();
   }, 1800);
 });
@@ -1678,7 +1678,7 @@ async function updateAISuggestions() {
     aiCleanupBroad: '🧹 Clean more',
     aiCleanupPressure: '📑 Reduce tabs',
     aiCleanup: '🧹 Clean',
-    forceCheck: '🔍 Review',
+    forceCheck: '🔍 Preview',
     armDeploy: '⏳ Arm',
     setModeDeploy: '🚀 Deploy',
     setModeTest: '🧪 Test',

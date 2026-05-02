@@ -176,7 +176,7 @@ Toggle in popup header (`🚀 Deploy` / `⏳ Armed` / `🧪 Test`).
 - **Deploy mode**: idle-triggered `performStaleCheck()` and `aiCleanup()` can call `chrome.tabs.remove()`. Scheduled stale scans in Deploy mode require `chrome.idle` to report `idle` or `locked`; while the Mac is active, they only refresh stale tags.
 - **Armed mode**: behaves like Test mode (`testMode: true`) until close-time readiness reaches the Deploy target, then `deploymentStatus()` promotes it to Deploy automatically. Switching back to Test clears the armed state.
 - **Test mode** (fresh-install default): Same logic, but calls `tagTab(tabId)` instead — tabs get red `🏷 TEST` badge in popup. Tagged tab IDs stored in `chrome.storage.local` under `nj:taggedTabs`.
-- **Manual Check**: popup `Check` sends `forceCheck`, which now calls `performStaleCheck({ dryRun: true, source: "manual_check" })`. It refreshes stale-tab tags and reports counts, but never closes tabs, even while Deploy is active. Use `AI Clean` or scheduled auto-cleanup for real closure.
+- **Manual Preview**: popup `Preview` sends `forceCheck`, which calls `performStaleCheck({ dryRun: true, source: "manual_check" })`. It refreshes stale-tab tags and reports counts, but never closes tabs, even while Deploy is active. Use `AI Clean` or scheduled auto-cleanup for real closure.
 - Tags cleared at start of each scan (`clearAllTags()`), so each run shows fresh results.
 - Idle-context acceleration and automatic stale closure are only applied while `chrome.idle` reports `idle` or `locked`. A model can still show a high time-window prior while the user is active, but active state suppresses the cleanup multiplier, high-confidence early-close path, and scheduled stale closure.
 - `Reset Model State` is available both in the popup and via `scripts/reset_model_state.sh`. It clears closure learning, root-domain memory, idle predictions, and companion-side artifacts. The shell script writes a reset request so the live native host clears its in-memory store on the next message.
@@ -231,7 +231,7 @@ The foreground/background multiplier is clamped to `0.75x..1.75x`. Idle is an au
 
 **Memory/CPU bars** (popup header): Polls `chrome.system.memory.getInfo()` and `chrome.system.cpu.getInfo()` every 5s. Memory shows `used/total GB` in the tooltip and percentage bar. CPU shows percentage plus a very compact model/thread label such as `M3 8T`; keep it short or the popup header will overflow. Color: green (<60%), orange (60–80%), red (≥80%). The status row also shows a compact `Pkg ~xW` estimate derived from CPU telemetry; exact macOS package watts require privileged `powermetrics`, so do not label this as an exact sensor readout.
 
-**AI Cleanup button** (popup header): Locked in Test / Armed; only Deploy can actually clean. Header button sends `profile: "pressure"` and reduces tab/memory pressure toward configured targets. Suggestion-card buttons send bounded trim profiles: `safe` closes at most `SAFE_CLEANUP_POLICY.maxCount` and `broad` closes at most `PROACTIVE_CLEANUP_POLICY.maxCount`. Scoring:
+**AI Cleanup button** (popup header): Locked in Test / Armed; only Deploy can actually clean. Header button sends `profile: "pressure"` and reduces tab/memory pressure toward configured targets. Suggestion-card buttons send bounded trim profiles: `safe` closes at most `SAFE_CLEANUP_POLICY.maxCount` and `broad` closes at most `PROACTIVE_CLEANUP_POLICY.maxCount`. If no tab meets the strict safe threshold but broad low-importance candidates exist, `safe` takes the top-ranked one or two broad candidates so the UI still offers a small first step. Scoring:
 ```
 score = categoryBias + log₂(interactions + 1) × 8 + normalizedImportance × 14 - min(90, backgroundAgeMs / effectiveClosureTime × 80) - learnedShortness × 24
 ```
@@ -255,11 +255,11 @@ Below memory bar in popup. `getAISuggestion()` in background.js analyzes current
 - 🔵 `info` — tab count > target, stale tabs exist, low-importance tabs are ready to trim, or memory is slightly above target.
 - 🟢 `ok` — everything nominal.
 
-Each suggestion has `action` or `actions` plus `text`. Popup renders clickable cards that trigger the corresponding action, including paired safe/broad AI Clean buttons for low-importance tabs. Safe/broad AI Clean actions stay disabled unless Deploy is active. There is no Ignore button anymore.
+Each suggestion has `action` or `actions` plus `text`. Popup renders clickable cards that trigger the corresponding action. Stale-tab preview is its own card and is available in any mode because it only tags tabs. Low-importance cleanup is a separate card with paired safe/broad AI Clean buttons; those buttons stay hidden unless Deploy is active. There is no Ignore button anymore.
 
-Popup refresh behavior: `Check`, `AI Clean`, mode changes, holiday-calendar changes, and settings saves all refresh AI Suggestions. A low-frequency 30s timer also refreshes suggestions while the popup stays open.
+Popup refresh behavior: `Preview`, `AI Clean`, mode changes, holiday-calendar changes, and settings saves all refresh AI Suggestions. A low-frequency 30s timer also refreshes suggestions while the popup stays open.
 
-Updated (2026-05-02): Cleanup-related suggestions are consolidated into one decision card. Tab-count pressure, memory pressure, stale tabs, and low-importance rankings should not appear as separate duplicate "turn on AI Clean" messages. The card exposes unique actions only: safe trim, broad trim / reduce tabs, and stale review.
+Updated (2026-05-03): Cleanup-related suggestions are separated by job: pressure state, stale preview, and low-importance cleanup. Avoid merging stale preview counts with proactive trim counts; they are different actions. The low-importance cleanup card should expose exactly two scopes in Deploy: `Clean safest` and `Clean more`.
 
 Training samples: the popup displays real `trainingSamples` from the companion. It no longer fakes `99/100` while the model is awaiting enough valid/varied samples; raw browser events are shown separately as `0 valid (N events)` when applicable.
 

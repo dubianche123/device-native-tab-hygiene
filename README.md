@@ -277,9 +277,9 @@ Reload the browser extension after importing so the companion reloads the model.
 
 ## Using The Popup
 
-- **Check**: Reviews stale tabs immediately and tags them without closing anything.
+- **Preview**: Tags stale tabs immediately without closing anything.
 - **AI Clean**: Header cleanup reduces tab or memory pressure toward your targets. Suggestion-card trims are bounded separately as `Clean safest` and `Clean more`.
-- **AI Suggestions**: Combines tab-count, memory, stale-tab, and low-importance signals into one cleanup decision card, while keeping Deploy/Test readiness separate.
+- **AI Suggestions**: Shows separate cards for tab/memory pressure, stale-tab preview, and low-importance cleanup, while keeping Deploy/Test readiness separate.
 - **Reset Model State**: Clears closure learning, domain-memory shortcuts, idle predictions, and the local companion artifacts.
 - **MEM / CPU**: Shows current memory pressure, CPU usage, and compact CPU model / thread count.
 - **ML Insights**: Shows idle windows for the next seven days with workday, weekend, or holiday labels.
