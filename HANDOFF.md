@@ -190,6 +190,7 @@ Closed records are stored by category under `closedLog` in `chrome.storage.local
 - Batch restore sends `restoreClosedTabs` with selected restorable `{ category, id, url, sessionId }` entries.
 - Closed-log cleanup sends `removeClosedRecords` for any selected records, including records already marked `restoredAt`, or `clearRestoredClosedRecords` to remove all restored entries.
 - Background restores sequentially via `chrome.sessions.restore(sessionId)` when possible, then falls back to `chrome.tabs.create({ url })`, and marks each successful record with `restoredAt`.
+- Restoring an automatically closed record is corrective feedback: `restoreClosedTab()` removes the linked `auto_cleanup` closure-learning sample via `closedRecordId`, with a legacy root/time fallback for older samples.
 
 ## Protected Tabs & Foreground/Background Lifecycle
 
@@ -286,7 +287,7 @@ Learns from HOW the user closes tabs to dynamically adjust per-category and per-
 
 **Learned close-time floor**: Short-session categories can learn down to 2 minutes. Important categories (`ai`, `work`, `email`, `reference`, `finance`) floor at 10 minutes so a few quick closes do not make long-lived work/AI tabs dangerously aggressive. Uncategorized `other` floors at 12 hours because unknown pages should be conservative until classification improves.
 
-**Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation.
+**Anti-feedback-loop**: Programmatic `chrome.tabs.remove()` calls must call `markProgrammaticClose()` before removal so `tabs.onRemoved` does not misrecord them as `manual_browser_close`. Auto-cleanup samples are recorded for context but do not create threshold recommendations; only meaningful manual closes drive threshold adaptation. If the user restores an auto-closed tab, the linked auto-cleanup sample is removed from closure learning.
 
 **Timed blacklist**: Settings store `blacklist` as `[{ pattern, hours, minutes }]`. Matching is substring-based against hostname or full URL. Blacklist entries use fixed close time (`0–99` hours, `0–59` minutes, fallback 1 hour), bypass category/learned thresholds, and are excluded from closure learning like whitelist traffic. `performStaleCheck()` records blacklist closes with `blacklist_*` reason; AI Cleanup can close blacklisted tabs only after their fixed time has elapsed.
 

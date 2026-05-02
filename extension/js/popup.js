@@ -869,6 +869,7 @@ async function loadClosedLog() {
       btn.textContent = response?.ok ? 'Restored' : 'Failed';
       closedSelection.delete(closedSelectionKey(btn.dataset.cat, btn.dataset.id));
       await loadClosedLog();
+      await loadClosureLearning();
     });
   });
 
@@ -907,6 +908,7 @@ document.getElementById('btn-restore-selected').addEventListener('click', async 
     ? `Restored ${response.restoredCount}, failed ${response.failedCount}`
     : `Restored ${response?.restoredCount || 0}`;
   await loadClosedLog();
+  await loadClosureLearning();
 });
 
 document.getElementById('btn-clear-selected').addEventListener('click', async () => {

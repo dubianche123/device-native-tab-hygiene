@@ -106,17 +106,22 @@ function requiredManualSamples(category, scope = 'domain') {
  * @param {number} [sample.backgroundAgeMs] - time since tab left foreground
  * @param {number} [sample.lastBackgroundedAt] - timestamp when tab left foreground
  * @param {string} [sample.url] - used only to derive rootDomain for local learning
+ * @param {string} [sample.closedRecordId] - closed-log record id for reversible auto-cleanup samples
+ * @param {number} [sample.closedAt] - timestamp when the closure happened
  */
 export async function recordClosureSample(sample) {
   const data = await getClosureData();
   const now = Date.now();
   const type = normalizeClosureType(sample.type);
   const rootDomain = sample.rootDomain || getLearningRootDomain(sample.url || '');
+  const closedAt = sample.closedAt || now;
 
   data.samples.push({
     type,
     category: sample.category || 'other',
     rootDomain,
+    url: sample.url || '',
+    closedRecordId: sample.closedRecordId || null,
     dwellMs: sample.dwellMs || 0,
     ageMs: sample.ageMs || 0,
     backgroundAgeMs: sample.backgroundAgeMs ?? null,
@@ -124,8 +129,8 @@ export async function recordClosureSample(sample) {
     openedAt: sample.openedAt || now,
     lastVisited: sample.lastVisited || now,
     lastBackgroundedAt: sample.lastBackgroundedAt || null,
-    closedAt: now,
-    hourOfDay: new Date().getHours(),
+    closedAt,
+    hourOfDay: new Date(closedAt).getHours(),
     weight: isManualClosure(type) ? 1 : AUTO_CLEANUP_WEIGHT,
   });
 
@@ -136,6 +141,42 @@ export async function recordClosureSample(sample) {
 
   await setClosureData(data);
   return sample;
+}
+
+export async function removeClosureSamplesForClosedRecord({ closedRecordId, url, closedAt, type = 'auto_cleanup' } = {}) {
+  const data = await getClosureData();
+  const samples = data.samples || [];
+  const targetRoot = getLearningRootDomain(url || '');
+  const targetClosedAt = Number(closedAt) || 0;
+  let removedCount = 0;
+  let fallbackRemoved = false;
+
+  data.samples = samples.filter(sample => {
+    if (normalizeClosureType(sample.type) !== type) return true;
+
+    if (closedRecordId && sample.closedRecordId === closedRecordId) {
+      removedCount++;
+      return false;
+    }
+
+    const legacyTimeMatch = targetClosedAt > 0
+      && Math.abs((Number(sample.closedAt) || 0) - targetClosedAt) <= 2 * 60 * 1000;
+    const legacyUrlMatch = url && sample.url === url;
+    const legacyRootMatch = targetRoot && sample.rootDomain === targetRoot;
+    if (!fallbackRemoved && removedCount === 0 && legacyTimeMatch && (legacyUrlMatch || legacyRootMatch)) {
+      fallbackRemoved = true;
+      removedCount++;
+      return false;
+    }
+
+    return true;
+  });
+
+  if (removedCount > 0) {
+    await setClosureData(data);
+  }
+
+  return { ok: true, removedCount };
 }
 
 function summariseClosureBucket(key, b, defaultCategory = DEFAULT_CATEGORY.key, options = {}) {

@@ -49,7 +49,13 @@ import {
   shouldProactivelyCleanTab,
 } from './cleanup-ranking.js';
 import { allowsRootDomainLearning } from './domain-utils.js';
-import { recordClosureSample, getLearnedThresholds, getCategoryClosureStats, getLearningSummary } from './closure-learner.js';
+import {
+  recordClosureSample,
+  removeClosureSamplesForClosedRecord,
+  getLearnedThresholds,
+  getCategoryClosureStats,
+  getLearningSummary,
+} from './closure-learner.js';
 import { getLearningRootDomain, isSearchResultPage, SEARCH_RESULTS_CATEGORY } from './search-results.js';
 import {
   classifyURL,
@@ -416,7 +422,7 @@ async function getProtectedTabIds() {
   return protected_;
 }
 
-async function recordTabClosureForLearning(entry, type, now = Date.now()) {
+async function recordTabClosureForLearning(entry, type, now = Date.now(), closedRecordId = null) {
   if (!entry?.url) return;
   // Skip blacklisted URLs — they follow fixed rules, not learned heuristics.
   const settings = await getSettings();
@@ -427,6 +433,8 @@ async function recordTabClosureForLearning(entry, type, now = Date.now()) {
     category: searchResult ? SEARCH_RESULTS_CATEGORY : (entry.category || 'other'),
     url: entry.url,
     rootDomain: searchResult ? getLearningRootDomain(entry.url) : (entry.rootDomain || getLearningRootDomain(entry.url)),
+    closedRecordId,
+    closedAt: now,
     dwellMs: entry.dwellMs || 0,
     ageMs: closureAgeMs(entry, now),
     backgroundAgeMs: entry.lastBackgroundedAt ? Math.max(0, now - entry.lastBackgroundedAt) : null,
@@ -435,6 +443,21 @@ async function recordTabClosureForLearning(entry, type, now = Date.now()) {
     lastVisited: entry.lastVisited || now,
     lastBackgroundedAt: entry.lastBackgroundedAt || null,
   });
+}
+
+function isAutoClosedRecord(record = {}) {
+  return record.reason !== 'manual_popup_close'
+    && (
+      String(record.reason || '').startsWith('ai_cleanup')
+      || String(record.reason || '').startsWith('idle_')
+      || String(record.reason || '').startsWith('confidence_idle_')
+    );
+}
+
+async function getClosedRecord(category, id) {
+  if (!category || !id) return null;
+  const log = await getClosedLog();
+  return (log[category] || []).find(entry => entry.id === id) || null;
 }
 
 function queryIdleState() {
@@ -583,7 +606,9 @@ async function findRecentlyClosedSession(url) {
 }
 
 async function restoreClosedTab({ category, id, url, sessionId }) {
+  const record = await getClosedRecord(category, id);
   let restored = null;
+  let learningRemovedCount = 0;
   if (sessionId) {
     restored = await chrome.sessions.restore(sessionId).catch(() => null);
   }
@@ -594,9 +619,18 @@ async function restoreClosedTab({ category, id, url, sessionId }) {
 
   if (restored && category && id) {
     await markClosedRecordRestored(category, id);
+    if (isAutoClosedRecord(record)) {
+      const removal = await removeClosureSamplesForClosedRecord({
+        closedRecordId: id,
+        url: record?.url || url,
+        closedAt: record?.closedAt,
+        type: 'auto_cleanup',
+      });
+      learningRemovedCount = removal.removedCount || 0;
+    }
   }
 
-  return { ok: Boolean(restored), restored };
+  return { ok: Boolean(restored), restored, learningRemovedCount };
 }
 
 async function restoreClosedTabs(items = []) {
@@ -607,6 +641,7 @@ async function restoreClosedTabs(items = []) {
       category: item.category || null,
       id: item.id || null,
       ok: Boolean(result.ok),
+      learningRemovedCount: result.learningRemovedCount || 0,
     });
   }
 
@@ -614,6 +649,7 @@ async function restoreClosedTabs(items = []) {
     ok: results.some(result => result.ok),
     restoredCount: results.filter(result => result.ok).length,
     failedCount: results.filter(result => !result.ok).length,
+    learningRemovedCount: results.reduce((sum, result) => sum + (result.learningRemovedCount || 0), 0),
     results,
   };
 }
@@ -962,7 +998,7 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
     const sessionId = await findRecentlyClosedSession(entry.url);
 
     // Record the closure
-    await appendClosedRecord({
+    const closedRecordId = await appendClosedRecord({
       url: entry.url,
       title: entry.title,
       favIconUrl: entry.favIconUrl || '',
@@ -976,7 +1012,7 @@ async function performStaleCheck({ dryRun = false, source = 'auto' } = {}) {
       interactions: entry.interactions || 0,
     });
 
-    await recordTabClosureForLearning(entry, 'auto_cleanup', now);
+    await recordTabClosureForLearning(entry, 'auto_cleanup', now, closedRecordId);
 
     closedTabs.push({
       url: entry.url,
@@ -1279,7 +1315,7 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
 
     const categoryKey = effectiveCategoryKey(entry);
     const sessionId = await findRecentlyClosedSession(entry.url);
-    await appendClosedRecord({
+    const closedRecordId = await appendClosedRecord({
       url: entry.url,
       title: entry.title,
       favIconUrl: entry.favIconUrl || '',
@@ -1293,7 +1329,7 @@ async function aiCleanup({ source = 'manual', profile = 'broad' } = {}) {
       interactions: entry.interactions || 0,
     });
 
-    await recordTabClosureForLearning(entry, 'auto_cleanup', now);
+    await recordTabClosureForLearning(entry, 'auto_cleanup', now, closedRecordId);
 
     await removeTabEntry(tabId);
 

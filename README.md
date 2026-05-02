@@ -137,7 +137,7 @@ Hardcoded timers are predictable, but they are also blunt. A tab that sat untouc
 - **Holiday-aware idle predictions**: Japan and China calendars can widen or shift likely idle windows in the ML insights view.
 - **AI Cleanup**: Prioritizes reducing tab count first, then bounded memory-pressure cleanup. In Deploy mode, manual AI Clean can also proactively trim a few clearly low-value tabs even when the machine is already under target, while still ranking by learned close-time pressure, engagement, and interaction count.
 - **Transparent telemetry UI**: Memory, CPU, model readiness, closure learning, and idle-confidence state are shown directly in the popup.
-- **Closed-tab recovery**: Tabs closed by the extension can be restored one-by-one or in batches.
+- **Closed-tab recovery**: Tabs closed by the extension can be restored one-by-one or in batches. Restoring an auto-closed tab removes that auto-cleanup sample from learning.
 
 ## Category Closure Time Rules
 
