@@ -1,6 +1,6 @@
 # Neural-Janitor Agent Handoff
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
 
 ## Identity
 
@@ -17,6 +17,18 @@ Legacy compatibility intentionally remains for:
 - old binaries: `SmartTabHygieneCompanion`, `MimoCompanion`
 - old app data dirs: `~/Library/Application Support/Smart Tab Hygiene`, `~/Library/Application Support/Mimo`
 - old env vars: `SMART_TAB_HYGIENE_*`, `MIMO_*`
+
+## Current Session State
+
+- Latest pushed commit on `main`: `85aa4a9 Clarify AI suggestion cleanup scopes`
+- Working tree was clean at handoff time.
+- Current popup wording is intentional: `Preview` only tags stale tabs and never closes them; `AI Clean` is the destructive cleanup path and stays Deploy-only.
+- AI Suggestions are split into three jobs now: pressure state, stale preview, and low-importance cleanup. Do not merge their counters back into one sentence or one button.
+- Safe cleanup now falls back to the top-ranked broad candidates when strict safe matches are empty, so the UI still offers a small first cut.
+- Native Messaging must stay on short-lived ports. Do not reintroduce a global `connectNative()` port in `idle-detector.js`, or Chrome/Edge can hang on exit again.
+- Companion startup must stay fast. Do not move Core ML loading back into the `health` path or make `predict` retrain synchronously.
+- Installed companion binary path is `~/Library/Application Support/Neural-Janitor/NeuralJanitorCompanion`.
+- If the repo is moved, re-discover the root with `git rev-parse --show-toplevel` and treat every absolute path in the old chat as stale.
 
 ## IPC Contract
 
@@ -35,6 +47,8 @@ JS request types:
 - `health`: returns current model/runtime/hardware telemetry. JS also sends `idleSchedule` so the confidence curve uses the same reference prior as predictions.
 - `retrain`: forces local Create ML retraining.
 - `classifyURL`: returns local NLP category classification.
+
+Implementation note for the next agent: `classifyURL` is no longer allowed to be a stub that always returns `other`. If the browser cannot classify a page locally, the fallback must be explicit in the UI or in the response payload, not hidden behind a fake "classification" result.
 
 Swift response types:
 
@@ -88,6 +102,15 @@ NPU disconnect behavior:
 - Model export script: `scripts/export_model_bundle.sh`
 - Model import script: `scripts/import_model_bundle.sh`
 - Bootstrap trainer: `scripts/train_model.py`
+
+If you are picking this up after the workspace was moved, start by checking:
+
+```bash
+git rev-parse --show-toplevel
+git status --short
+```
+
+Then confirm the companion path and browser install state before making code changes.
 
 ## Validation Commands
 
@@ -329,6 +352,7 @@ Core JS files pass `node --check`. CSS braces balanced. Manifest JSON valid.
 - Browser extension install is still Load Unpacked from `extension/`.
 - Full local ML requires rerunning `./scripts/install.sh <chrome-extension-id> [edge-extension-id]` after the native host id rename. The script now refuses placeholder ids, installs the binary under `~/Library/Application Support/Neural-Janitor/`, and can write multiple allowed origins when Chrome/Edge ids differ.
 - Chrome/Edge cannot silently install a Native Messaging host from an extension package; a script, signed app, or pkg installer is still required for companion setup.
+- If Chrome or Edge starts showing `Link Disconnected` again, first verify the browser is pointing at the companion under Application Support, not an older `~/.local/bin` binary, and make sure the extension was reloaded after the native host manifest changed.
 - Cross-Mac model transfer is snapshot-based. Use `./scripts/export_model_bundle.sh --output ~/Desktop` on the source Mac and `./scripts/import_model_bundle.sh <bundle.tar.gz>` on the target Mac after installing the extension/companion. Do not live-sync `~/Library/Application Support/Neural-Janitor/` through iCloud while the companion is running; `activity_events.json` is hot-written and can conflict.
 - Transfer bundle defaults to model artifacts only: `TabIdlePredictor.mlmodel`, `idle_lookup.json`, and `model_metrics.json`. Raw `activity_events.json` requires `--with-events` on export and import.
 - Core ML public APIs expose requested compute units and hardware availability, but not the exact per-inference processor. Do not claim exact ANE usage for a single inference.
